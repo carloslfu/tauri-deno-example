@@ -13,8 +13,17 @@ interface Task {
   result?: Record<string, any>;
 }
 
+const initialCode = `import * as cowsay from "https://esm.sh/cowsay@1.6.0"
+
+const text = cowsay.say({ text: "Hey! 🤠" })
+
+console.log(text)
+
+RuntimeExtension.returnValue({ text })
+`;
+
 function App() {
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(initialCode);
   const [result, setResult] = useState<Record<string, any> | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isPolling, setIsPolling] = useState(false);
@@ -124,6 +133,10 @@ function App() {
     }
   };
 
+  const handleClearCompletedTasks = () => {
+    setTasks((prev) => prev.filter((t) => t.status === "running"));
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex">
       <div className="flex-1 p-4">
@@ -148,9 +161,15 @@ function App() {
 
             {tasks.length > 0 && (
               <div className="mt-4">
-                <h2 className="text-lg font-medium text-gray-900 mb-2">
-                  Runs:
-                </h2>
+                <div className="flex justify-between items-center mb-2">
+                  <h2 className="text-lg font-medium text-gray-900">Runs:</h2>
+                  <button
+                    onClick={handleClearCompletedTasks}
+                    className="text-sm text-gray-500 hover:text-gray-700"
+                  >
+                    Clear Completed
+                  </button>
+                </div>
                 <div className="space-y-2">
                   {tasks.map((task) => (
                     <div key={task.id} className="bg-gray-50 p-3 rounded-md">
