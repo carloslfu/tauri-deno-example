@@ -46,7 +46,7 @@ pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyEr
     let temp_dir = std::env::temp_dir().join("tauri_deno_example");
     std::fs::create_dir_all(&temp_dir).unwrap();
 
-    let temp_code_path = temp_dir.join("temp_code.ts");
+    let temp_code_path = temp_dir.join(format!("temp_code_{}.ts", task_id));
 
     println!("Writing code to {}", temp_code_path.display());
 
@@ -106,6 +106,8 @@ pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyEr
             .unwrap()
             .insert(task_id.to_string(), e.to_string());
     }
+
+    std::fs::remove_file(&temp_code_path).unwrap();
 
     Ok(())
 }
