@@ -15,11 +15,18 @@ interface Task {
 
 const initialCode = `import * as cowsay from "https://esm.sh/cowsay@1.6.0"
 
-const text = cowsay.say({ text: "Hey! 🤠" })
+console.log("-- taskId", RuntimeExtension.taskId)
+
+const text = cowsay.say({
+  text: \`Hey! 🤠 (taskId: \${RuntimeExtension.taskId})\`,
+})
 
 console.log(text)
 
 RuntimeExtension.returnValue({ text })
+
+// wait 5 seconds
+await new Promise((resolve) => setTimeout(resolve, 5000))
 `;
 
 function App() {
@@ -37,9 +44,13 @@ function App() {
 
         for (const task of runningTasks) {
           try {
+            console.log("-- polling", task.id);
+
             const result = await invoke("get_return_value", {
               taskId: task.id,
             });
+
+            console.log("-- result", task.id, result);
 
             let parsedResult: Record<string, any>;
             try {
@@ -80,7 +91,7 @@ function App() {
         if (runningTasks.length === 0) {
           setIsPolling(false);
         }
-      }, 1000);
+      }, 2000);
     }
 
     return () => clearInterval(interval);
@@ -97,6 +108,8 @@ function App() {
     try {
       setTasks((prev) => [...prev, newTask]);
       setIsPolling(true);
+
+      console.log("-- running code", newTaskId);
 
       await invoke("run_code", {
         taskId: newTaskId,
