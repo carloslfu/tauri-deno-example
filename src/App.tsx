@@ -214,9 +214,9 @@ function App() {
                         </span>
                       </div>
                       {task.result && (
-                        <pre className="font-mono text-sm overflow-auto max-h-32 whitespace-pre-wrap">
-                          {JSON.stringify(task.result, null, 2)}
-                        </pre>
+                        <div className="bg-gray-50 p-3 rounded-md font-mono text-sm overflow-auto max-h-64 whitespace-pre-wrap">
+                          {task.result.text}
+                        </div>
                       )}
                     </div>
                   ))}
@@ -229,9 +229,9 @@ function App() {
                 <h2 className="text-lg font-medium text-gray-900 mb-2">
                   Latest Result:
                 </h2>
-                <pre className="bg-gray-50 p-3 rounded-md font-mono text-sm overflow-auto max-h-64 whitespace-pre-wrap">
-                  {JSON.stringify(result, null, 2)}
-                </pre>
+                <div className="bg-gray-50 p-3 rounded-md font-mono text-sm overflow-auto max-h-64 whitespace-pre-wrap">
+                  {result.text}
+                </div>
               </div>
             )}
           </div>
