@@ -6,14 +6,6 @@
   "permissions": [
     "core:default",
     "shell:allow-open",
-    {
-      "identifier": "http:default",
-      "allow": [
-        {
-          "url": "https://api.anthropic.com"
-        }
-      ]
-    },
     "http:default",
     "store:default"
   ]
