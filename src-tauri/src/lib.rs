@@ -46,7 +46,7 @@ fn run_task(app_handle: tauri::AppHandle, task_id: &str, code: &str) -> Result<(
 
         let task = runtime.block_on(async {
             tokio::select! {
-                _ = deno::run(app_handle, &app_path, &task_id_clone, &code) => {},
+                _ = deno::run(&app_path, &task_id_clone, &code) => {},
                 _ = stop_rx => {
                     println!("Task cancelled");
                 }
@@ -100,8 +100,7 @@ fn stop_task(app_handle: tauri::AppHandle, task_id: String) -> Result<(), String
                 }
             };
 
-            let app_handle = app_handle.clone();
-            deno::update_task_state(app_handle, &task_id, "stopped");
+            deno::update_task_state(&task_id, "stopped");
         });
     }
 
@@ -133,6 +132,11 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            deno::set_app_handle(app.handle().clone());
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             run_task,
             stop_task,

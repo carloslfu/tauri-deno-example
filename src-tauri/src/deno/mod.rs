@@ -28,6 +28,15 @@ use module_loader::TypescriptModuleLoader;
 use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter};
 
+// Global app handle
+static APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
+
+// Task events channel for task state changes that will be received by Tauri
+static TAURI_TASK_EVENTS: Lazy<(Sender<Task>, Mutex<Receiver<Task>>)> = Lazy::new(|| {
+    let (tx, rx) = channel();
+    (tx, Mutex::new(rx))
+});
+
 #[derive(Debug, Clone)]
 pub enum PermissionsResponse {
     Allow,
@@ -132,12 +141,27 @@ deno_runtime::deno_core::extension!(
   esm = [dir "src/deno", "bootstrap.js"]
 );
 
-pub async fn run(
-    app_handle: AppHandle,
-    app_path: &Path,
-    task_id: &str,
-    code: &str,
-) -> Result<(), AnyError> {
+pub fn set_app_handle(app_handle: AppHandle) {
+    let app_handle_clone = app_handle.clone();
+
+    *APP_HANDLE.lock().unwrap() = Some(app_handle);
+
+    // receive events from channel and send them to tauri
+    tokio::spawn(async move {
+        while let Ok(task) = TAURI_TASK_EVENTS.1.lock().unwrap().recv() {
+            println!("Received task state changed from channel, emitting...");
+
+            let result = app_handle_clone.emit("task-state-changed", task);
+            if result.is_err() {
+                println!("Failed to emit task state changed");
+            }
+
+            println!("Task state changed emitted");
+        }
+    });
+}
+
+pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyError> {
     // create temp dir
     let temp_dir = std::env::temp_dir().join("tauri_deno_example");
     std::fs::create_dir_all(&temp_dir).unwrap();
@@ -174,15 +198,8 @@ pub async fn run(
         Task::new(task_id.to_string(), "running".to_string()),
     );
 
-    let app_handle = app_handle.clone();
-
     // Clone app_handle before moving it into CustomPrompter
-    let app_handle_clone = app_handle.clone();
-    set_prompter(Box::new(CustomPrompter::new(
-        app_handle_clone,
-        task_id.to_string(),
-        rx,
-    )));
+    set_prompter(Box::new(CustomPrompter::new(task_id.to_string(), rx)));
 
     let mut worker = MainWorker::bootstrap_from_options(
         main_module.clone(),
@@ -217,8 +234,7 @@ pub async fn run(
         task.state = "error".to_string();
         task.error = e.to_string();
 
-        let app_handle = app_handle.clone();
-        emit_task_state_changed(app_handle, task.clone());
+        emit_task_state_changed(task.clone());
         std::fs::remove_file(&temp_code_path).unwrap();
 
         return Ok(());
@@ -232,7 +248,7 @@ pub async fn run(
         task.state = "error".to_string();
         task.error = e.to_string();
 
-        emit_task_state_changed(app_handle, task.clone());
+        emit_task_state_changed(task.clone());
         std::fs::remove_file(&temp_code_path).unwrap();
 
         return Ok(());
@@ -243,7 +259,7 @@ pub async fn run(
     task.state = "completed".to_string();
 
     std::fs::remove_file(&temp_code_path).unwrap();
-    emit_task_state_changed(app_handle, task.clone());
+    emit_task_state_changed(task.clone());
 
     // Clean up permission channel
     PERMISSION_CHANNELS.lock().unwrap().remove(task_id);
@@ -260,34 +276,26 @@ pub fn clear_completed_tasks() {
     state_lock.retain(|_, task| task.state == "running");
 }
 
-pub fn update_task_state(app_handle: AppHandle, task_id: &str, state: &str) {
+pub fn update_task_state(task_id: &str, state: &str) {
     println!("Updating task state --");
     let mut state_lock = TASK_STATE.lock().unwrap();
     let task = state_lock.get_mut(task_id).unwrap();
     task.state = state.to_string();
 
     println!("Emitting task state changed -- 2");
-    emit_task_state_changed(app_handle, task.clone());
+    emit_task_state_changed(task.clone());
 }
 
-fn emit_task_state_changed(app_handle: AppHandle, task: Task) {
+fn emit_task_state_changed(task: Task) {
     println!(
-        "Emitting task state changed, task_id: {}, state: {}",
+        "Emitting task state changed to channel, task_id: {}, state: {}",
         task.id, task.state
     );
 
-    let app_handle = app_handle.clone();
-
-    tokio::spawn({
-        async move {
-            let result = app_handle.emit("task-state-changed", task);
-            if result.is_err() {
-                println!("Failed to emit task state changed");
-            }
-
-            println!("Task state changed emitted");
-        }
-    });
+    let result = TAURI_TASK_EVENTS.0.send(task);
+    if result.is_err() {
+        println!("Failed to send task state changed");
+    }
 
     println!("Task state changed emitted 2 --");
 }
@@ -312,19 +320,13 @@ pub fn respond_to_permission_prompt(task_id: &str, response: PermissionsResponse
 }
 
 struct CustomPrompter {
-    app_handle: AppHandle,
     task_id: String,
     receiver: Arc<Mutex<Receiver<PermissionsResponse>>>,
 }
 
 impl CustomPrompter {
-    fn new(
-        app_handle: AppHandle,
-        task_id: String,
-        receiver: Receiver<PermissionsResponse>,
-    ) -> Self {
+    fn new(task_id: String, receiver: Receiver<PermissionsResponse>) -> Self {
         Self {
-            app_handle: app_handle.clone(),
             task_id,
             receiver: Arc::new(Mutex::new(receiver)),
         }
@@ -359,22 +361,18 @@ impl PermissionPrompter for CustomPrompter {
 
         println!("Emitting ----");
 
-        // Emit the task state changed event
-        let app_handle = self.app_handle.clone();
-        update_task_state(app_handle, &self.task_id, "waiting_for_permission");
+        update_task_state(&self.task_id, "waiting_for_permission");
 
         println!("Waiting for permission response...");
 
         match self.receiver.lock().unwrap().recv() {
             Ok(response) => {
-                let app_handle = self.app_handle.clone();
-                update_task_state(app_handle, &self.task_id, "running");
+                update_task_state(&self.task_id, "running");
 
                 response.to_prompt_response()
             }
             Err(_) => {
-                let app_handle = self.app_handle.clone();
-                update_task_state(app_handle, &self.task_id, "error");
+                update_task_state(&self.task_id, "error");
 
                 PromptResponse::Deny
             }
