@@ -18,8 +18,11 @@ const initialCode = `import * as cowsay from "https://esm.sh/cowsay@1.6.0"
 
 console.log("-- taskId", RuntimeExtension.taskId)
 
-// fetch a user name from an example json api
-const user = await fetch("https://jsonplaceholder.typicode.com/users/1").then(r => r.json())
+// fetch a random user name from an example json api
+
+const randomUserId = Math.floor(Math.random() * 10) + 1
+
+const user = await fetch(\`https://jsonplaceholder.typicode.com/users/\${randomUserId}\`).then(r => r.json())
 
 const text = cowsay.say({
   text: \`Hey \${user.name}! 🤠 (taskId: \${RuntimeExtension.taskId})\`,
