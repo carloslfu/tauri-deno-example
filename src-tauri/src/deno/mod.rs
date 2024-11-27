@@ -184,17 +184,19 @@ impl PermissionPrompter for CustomPrompter {
             "Is unary:",
             is_unary
         );
-        println!("Allow? [y/n]");
+        // println!("Allow? [y/n]");
 
-        let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_ok() {
-            match input.trim().to_lowercase().as_str() {
-                "y" | "yes" => PromptResponse::Allow,
-                _ => PromptResponse::Deny,
-            }
-        } else {
-            println!("Failed to read input, denying permission");
-            PromptResponse::Deny
-        }
+        return PromptResponse::Allow;
+
+        // let mut input = String::new();
+        // if std::io::stdin().read_line(&mut input).is_ok() {
+        //     match input.trim().to_lowercase().as_str() {
+        //         "y" | "yes" => PromptResponse::Allow,
+        //         _ => PromptResponse::Deny,
+        //     }
+        // } else {
+        //     println!("Failed to read input, denying permission");
+        //     PromptResponse::Deny
+        // }
     }
 }
