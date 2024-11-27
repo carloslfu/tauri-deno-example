@@ -256,6 +256,7 @@ pub fn clear_completed_tasks() {
 }
 
 pub fn update_task_state(app_handle: &AppHandle, task_id: &str, state: &str) {
+    println!("Updating task state --");
     let mut state_lock = TASK_STATE.lock().unwrap();
     let task = state_lock.get_mut(task_id).unwrap();
     task.state = state.to_string();
@@ -263,16 +264,24 @@ pub fn update_task_state(app_handle: &AppHandle, task_id: &str, state: &str) {
 }
 
 fn emit_task_state_changed(app_handle: &AppHandle, task: Task) {
-    // Spawn a new thread to emit the event asynchronously
-    std::thread::spawn({
+    println!(
+        "Emitting task state changed, task_id: {}, state: {}",
+        task.id, task.state
+    );
+
+    tokio::spawn({
         let app_handle = app_handle.clone();
-        move || {
+        async move {
             let result = app_handle.emit("task-state-changed", task);
             if result.is_err() {
                 println!("Failed to emit task state changed");
             }
+
+            println!("Task state changed emitted");
         }
     });
+
+    println!("Task state changed emitted 2 --");
 }
 
 pub fn respond_to_permission_prompt(task_id: &str, response: PermissionsResponse) {
@@ -339,6 +348,8 @@ impl PermissionPrompter for CustomPrompter {
             // Add to history
             task.permission_history.push(prompt);
         }
+
+        println!("Emitting ----");
 
         // Emit the task state changed event
         update_task_state(&self.app_handle, &self.task_id, "waiting_for_permission");
