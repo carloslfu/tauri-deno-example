@@ -9,7 +9,7 @@ import { nanoid } from "./lib/nanoid";
 interface Task {
   id: string;
   code: string;
-  status: "running" | "completed" | "error";
+  status: "running" | "completed" | "error" | "stopped";
   result?: Record<string, any>;
   error?: string;
 }
@@ -134,7 +134,7 @@ function App() {
 
       console.log("-- running code", newTaskId);
 
-      await invoke("run_code", {
+      await invoke("run_task", {
         taskId: newTaskId,
         code: codeToRun || code,
       });
@@ -148,24 +148,30 @@ function App() {
     }
   };
 
-  const handleReplayTask = (taskCode: string) => {
-    handleRunCode(taskCode);
+  const handleReplayTask = async (task: Task) => {
+    setTasks((prev) =>
+      prev.map((t) => (t.id === task.id ? { ...t, status: "running" } : t))
+    );
+
+    setIsPolling(true);
+
+    try {
+      await invoke("run_task", {
+        taskId: task.id,
+        code: task.code,
+      });
+    } catch (error) {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id ? { ...t, status: "error", result: { error } } : t
+        )
+      );
+    }
   };
 
   const handleStopTask = async (taskId: string) => {
     try {
-      await invoke("stop_code", { taskId });
-      setTasks((prev) =>
-        prev.map((t) =>
-          t.id === taskId
-            ? {
-                ...t,
-                status: "completed",
-                result: { cancelled: true, message: "Task cancelled" },
-              }
-            : t
-        )
-      );
+      await invoke("stop_task", { taskId });
     } catch (error) {
       console.error("Failed to stop task:", error);
     }
@@ -227,7 +233,7 @@ function App() {
                             </>
                           ) : (
                             <button
-                              onClick={() => handleReplayTask(task.code)}
+                              onClick={() => handleReplayTask(task)}
                               className="text-green-500 hover:text-green-600"
                               title="Replay this task"
                             >

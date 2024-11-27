@@ -14,7 +14,7 @@ static SHUTDOWN_CHANNELS: Lazy<Mutex<HashMap<String, tokio::sync::oneshot::Sende
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[tauri::command]
-fn run_code(app_handle: tauri::AppHandle, task_id: &str, code: &str) -> Result<(), String> {
+fn run_task(app_handle: tauri::AppHandle, task_id: &str, code: &str) -> Result<(), String> {
     let app_path = app_handle
         .path()
         .app_data_dir()
@@ -68,7 +68,7 @@ fn run_code(app_handle: tauri::AppHandle, task_id: &str, code: &str) -> Result<(
 }
 
 #[tauri::command]
-fn stop_code(task_id: String) -> Result<(), String> {
+fn stop_task(task_id: String) -> Result<(), String> {
     let mut handles = THREAD_HANDLES.lock().unwrap();
 
     if let Some(handle) = handles.remove(&task_id) {
@@ -120,8 +120,8 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
-            run_code,
-            stop_code,
+            run_task,
+            stop_task,
             get_task_state,
             clear_completed_tasks
         ])
