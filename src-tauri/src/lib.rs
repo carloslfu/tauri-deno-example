@@ -100,7 +100,8 @@ fn stop_task(app_handle: tauri::AppHandle, task_id: String) -> Result<(), String
                 }
             };
 
-            deno::update_task_state(&app_handle, &task_id, "stopped");
+            let app_handle = app_handle.clone();
+            deno::update_task_state(app_handle, &task_id, "stopped");
         });
     }
 

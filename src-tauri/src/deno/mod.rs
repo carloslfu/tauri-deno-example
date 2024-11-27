@@ -174,8 +174,12 @@ pub async fn run(
         Task::new(task_id.to_string(), "running".to_string()),
     );
 
+    let app_handle = app_handle.clone();
+
+    // Clone app_handle before moving it into CustomPrompter
+    let app_handle_clone = app_handle.clone();
     set_prompter(Box::new(CustomPrompter::new(
-        &app_handle,
+        app_handle_clone,
         task_id.to_string(),
         rx,
     )));
@@ -213,7 +217,8 @@ pub async fn run(
         task.state = "error".to_string();
         task.error = e.to_string();
 
-        emit_task_state_changed(&app_handle, task.clone());
+        let app_handle = app_handle.clone();
+        emit_task_state_changed(app_handle, task.clone());
         std::fs::remove_file(&temp_code_path).unwrap();
 
         return Ok(());
@@ -227,7 +232,7 @@ pub async fn run(
         task.state = "error".to_string();
         task.error = e.to_string();
 
-        emit_task_state_changed(&app_handle, task.clone());
+        emit_task_state_changed(app_handle, task.clone());
         std::fs::remove_file(&temp_code_path).unwrap();
 
         return Ok(());
@@ -238,7 +243,7 @@ pub async fn run(
     task.state = "completed".to_string();
 
     std::fs::remove_file(&temp_code_path).unwrap();
-    emit_task_state_changed(&app_handle, task.clone());
+    emit_task_state_changed(app_handle, task.clone());
 
     // Clean up permission channel
     PERMISSION_CHANNELS.lock().unwrap().remove(task_id);
@@ -255,22 +260,25 @@ pub fn clear_completed_tasks() {
     state_lock.retain(|_, task| task.state == "running");
 }
 
-pub fn update_task_state(app_handle: &AppHandle, task_id: &str, state: &str) {
+pub fn update_task_state(app_handle: AppHandle, task_id: &str, state: &str) {
     println!("Updating task state --");
     let mut state_lock = TASK_STATE.lock().unwrap();
     let task = state_lock.get_mut(task_id).unwrap();
     task.state = state.to_string();
+
+    println!("Emitting task state changed -- 2");
     emit_task_state_changed(app_handle, task.clone());
 }
 
-fn emit_task_state_changed(app_handle: &AppHandle, task: Task) {
+fn emit_task_state_changed(app_handle: AppHandle, task: Task) {
     println!(
         "Emitting task state changed, task_id: {}, state: {}",
         task.id, task.state
     );
 
+    let app_handle = app_handle.clone();
+
     tokio::spawn({
-        let app_handle = app_handle.clone();
         async move {
             let result = app_handle.emit("task-state-changed", task);
             if result.is_err() {
@@ -311,7 +319,7 @@ struct CustomPrompter {
 
 impl CustomPrompter {
     fn new(
-        app_handle: &AppHandle,
+        app_handle: AppHandle,
         task_id: String,
         receiver: Receiver<PermissionsResponse>,
     ) -> Self {
@@ -352,18 +360,21 @@ impl PermissionPrompter for CustomPrompter {
         println!("Emitting ----");
 
         // Emit the task state changed event
-        update_task_state(&self.app_handle, &self.task_id, "waiting_for_permission");
+        let app_handle = self.app_handle.clone();
+        update_task_state(app_handle, &self.task_id, "waiting_for_permission");
 
         println!("Waiting for permission response...");
 
         match self.receiver.lock().unwrap().recv() {
             Ok(response) => {
-                update_task_state(&self.app_handle, &self.task_id, "running");
+                let app_handle = self.app_handle.clone();
+                update_task_state(app_handle, &self.task_id, "running");
 
                 response.to_prompt_response()
             }
             Err(_) => {
-                update_task_state(&self.app_handle, &self.task_id, "error");
+                let app_handle = self.app_handle.clone();
+                update_task_state(app_handle, &self.task_id, "error");
 
                 PromptResponse::Deny
             }
