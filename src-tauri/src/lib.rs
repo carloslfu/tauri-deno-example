@@ -1,8 +1,6 @@
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tauri::Manager;
-use tauri::{AppHandle, Emitter};
 
 mod deno;
 
@@ -15,13 +13,7 @@ static SHUTDOWN_CHANNELS: Lazy<Mutex<HashMap<String, tokio::sync::oneshot::Sende
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[tauri::command]
-fn run_task(app_handle: tauri::AppHandle, task_id: &str, code: &str) -> Result<(), String> {
-    let app_path = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
-
-    let app_path = app_path.clone();
+fn run_task(task_id: &str, code: &str) -> Result<(), String> {
     let code = code.to_string();
 
     let task_id = task_id.to_string();
@@ -44,9 +36,9 @@ fn run_task(app_handle: tauri::AppHandle, task_id: &str, code: &str) -> Result<(
 
         println!("Starting async task");
 
-        let task = runtime.block_on(async {
+        let _ = runtime.block_on(async {
             tokio::select! {
-                _ = deno::run(&app_path, &task_id_clone, &code) => {},
+                _ = deno::run(&task_id_clone, &code) => {},
                 _ = stop_rx => {
                     println!("Task cancelled");
                 }
@@ -69,7 +61,7 @@ fn run_task(app_handle: tauri::AppHandle, task_id: &str, code: &str) -> Result<(
 }
 
 #[tauri::command]
-fn stop_task(app_handle: tauri::AppHandle, task_id: String) -> Result<(), String> {
+fn stop_task(task_id: String) -> Result<(), String> {
     let mut handles = THREAD_HANDLES.lock().unwrap();
 
     if let Some(handle) = handles.remove(&task_id) {
@@ -127,13 +119,14 @@ fn respond_to_permission_prompt(task_id: String, response: String) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            deno::set_app_handle(app.handle().clone());
+            // deno::set_app_handle(app.handle().clone());
 
             Ok(())
         })

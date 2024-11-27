@@ -7795,6 +7795,7 @@ dependencies = [
  "deno_core",
  "deno_fs",
  "deno_runtime",
+ "dirs",
  "once_cell",
  "serde",
  "serde_json",

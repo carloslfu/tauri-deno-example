@@ -5,7 +5,6 @@ mod module_loader;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -146,8 +145,9 @@ pub fn set_app_handle(app_handle: AppHandle) {
 
     *APP_HANDLE.lock().unwrap() = Some(app_handle);
 
-    // receive events from channel and send them to tauri
-    tokio::spawn(async move {
+    // Create a new tokio runtime for handling the events
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.spawn(async move {
         while let Ok(task) = TAURI_TASK_EVENTS.1.lock().unwrap().recv() {
             println!("Received task state changed from channel, emitting...");
 
@@ -161,12 +161,15 @@ pub fn set_app_handle(app_handle: AppHandle) {
     });
 }
 
-pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyError> {
-    // create temp dir
-    let temp_dir = std::env::temp_dir().join("tauri_deno_example");
-    std::fs::create_dir_all(&temp_dir).unwrap();
+pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
+    // path of user directory
+    let user_dir = dirs::home_dir().unwrap();
 
-    let temp_code_path = temp_dir.join(format!("temp_code_{}.ts", task_id));
+    // create code dir
+    let code_dir = user_dir.join("tauri_deno_example");
+    std::fs::create_dir_all(&code_dir).unwrap();
+
+    let temp_code_path = code_dir.join(format!("temp_code_{}.ts", task_id));
 
     println!("Writing code to {}", temp_code_path.display());
 
