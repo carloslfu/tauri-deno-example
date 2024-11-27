@@ -141,13 +141,16 @@ deno_runtime::deno_core::extension!(
 );
 
 pub fn set_app_handle(app_handle: AppHandle) {
+    println!("Setting app handle");
     let app_handle_clone = app_handle.clone();
 
     *APP_HANDLE.lock().unwrap() = Some(app_handle);
 
-    // Create a new tokio runtime for handling the events
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.spawn(async move {
+    println!("App handle set, spawning event handler");
+
+    // Use Tauri's existing runtime instead of creating a new one
+    tauri::async_runtime::spawn(async move {
+        println!("Spawned event handler");
         while let Ok(task) = TAURI_TASK_EVENTS.1.lock().unwrap().recv() {
             println!("Received task state changed from channel, emitting...");
 
@@ -159,6 +162,8 @@ pub fn set_app_handle(app_handle: AppHandle) {
             println!("Task state changed emitted");
         }
     });
+
+    println!("after - Event handler spawned");
 }
 
 pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
@@ -237,7 +242,10 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
         task.state = "error".to_string();
         task.error = e.to_string();
 
-        emit_task_state_changed(task.clone());
+        let task_clone = task.clone();
+        drop(state_lock);
+
+        emit_task_state_changed(task_clone);
         std::fs::remove_file(&temp_code_path).unwrap();
 
         return Ok(());
@@ -251,7 +259,10 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
         task.state = "error".to_string();
         task.error = e.to_string();
 
-        emit_task_state_changed(task.clone());
+        let task_clone = task.clone();
+        drop(state_lock);
+
+        emit_task_state_changed(task_clone);
         std::fs::remove_file(&temp_code_path).unwrap();
 
         return Ok(());
@@ -261,8 +272,11 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
     let task = state_lock.get_mut(task_id).unwrap();
     task.state = "completed".to_string();
 
+    let task_clone = task.clone();
+    drop(state_lock);
+
     std::fs::remove_file(&temp_code_path).unwrap();
-    emit_task_state_changed(task.clone());
+    emit_task_state_changed(task_clone);
 
     // Clean up permission channel
     PERMISSION_CHANNELS.lock().unwrap().remove(task_id);
@@ -285,8 +299,11 @@ pub fn update_task_state(task_id: &str, state: &str) {
     let task = state_lock.get_mut(task_id).unwrap();
     task.state = state.to_string();
 
+    let task_clone = task.clone();
+    drop(state_lock);
+
     println!("Emitting task state changed -- 2");
-    emit_task_state_changed(task.clone());
+    emit_task_state_changed(task_clone);
 }
 
 fn emit_task_state_changed(task: Task) {
@@ -317,6 +334,8 @@ pub fn respond_to_permission_prompt(task_id: &str, response: PermissionsResponse
                 last.response = Some(response.clone());
             }
         }
+
+        drop(state_lock);
 
         let _ = tx.send(response);
     }
@@ -361,6 +380,7 @@ impl PermissionPrompter for CustomPrompter {
             // Add to history
             task.permission_history.push(prompt);
         }
+        drop(state_lock);
 
         println!("Emitting ----");
 

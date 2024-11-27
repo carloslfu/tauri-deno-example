@@ -125,8 +125,10 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
-        .setup(|app| {
-            // deno::set_app_handle(app.handle().clone());
+        .setup(move |app| {
+            println!("Setting app handle - root");
+            deno::set_app_handle(app.handle().clone());
+            println!("App handle set - root");
 
             Ok(())
         })
