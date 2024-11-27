@@ -22,23 +22,47 @@ type InternalTask = {
   error?: string;
 };
 
+const eventTarget = new EventTarget();
+
+await listen<InternalTask>("task-state-changed", (event) => {
+  eventTarget.dispatchEvent(
+    new CustomEvent("task-state-changed", { detail: event.payload })
+  );
+});
+
 const initialCode = `import * as cowsay from "https://esm.sh/cowsay@1.6.0"
 
 console.log("-- taskId", RuntimeExtension.taskId)
 
 // fetch a random user name from an example json api
 
-const randomUserId = Math.floor(Math.random() * 10) + 1
+// const randomUserId = Math.floor(Math.random() * 10) + 1
 
-const user = await fetch(\`https://jsonplaceholder.typicode.com/users/\${randomUserId}\`).then(r => r.json())
+// const user = await fetch(\`https://jsonplaceholder.typicode.com/users/\${randomUserId}\`).then(r => r.json())
 
-const text = cowsay.say({
-  text: \`Hey \${user.name}! 🤠 (taskId: \${RuntimeExtension.taskId})\`,
-})
+// const text = cowsay.say({
+//   text: \`Hey \${user.name}! 🤠 (taskId: \${RuntimeExtension.taskId})\`,
+// })
 
-console.log(text)
+// console.log(text)
 
-RuntimeExtension.returnValue({ text })
+// access too a post
+
+const post = await fetch("https://jsonplaceholder.typicode.com/posts/1").then(r => r.json())
+
+console.log(post)
+
+// write it to a file on the desktop by path
+
+const desktopPath = await Deno.desktopPath()
+
+console.log(desktopPath)
+
+await Deno.writeTextFile(\`\${desktopPath}/post.json\`, JSON.stringify(post))
+
+console.log("done")
+
+RuntimeExtension.returnValue({ text, post })
 
 // wait 5 seconds
 await new Promise((resolve) => setTimeout(resolve, 5000))
@@ -49,7 +73,9 @@ function App() {
   const [result, setResult] = useState<Record<string, any> | undefined>();
   const [tasks, setTasks] = useState<Task[]>([]);
 
-  const handleTaskStateChanged = useCallback((task: InternalTask) => {
+  const handleTaskStateChanged = useCallback((event: Event) => {
+    const task = (event as CustomEvent<InternalTask>).detail;
+
     console.log("-- task state changed", task);
 
     let result: Record<string, any> | undefined;
@@ -77,23 +103,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    let unsubscribe: UnlistenFn;
-
-    const subscribe = async () => {
-      unsubscribe = await listen<InternalTask>(
-        "task-state-changed",
-        (event) => {
-          handleTaskStateChanged(event.payload);
-        }
-      );
-    };
-
-    subscribe();
+    eventTarget.addEventListener("task-state-changed", handleTaskStateChanged);
 
     return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
+      eventTarget.removeEventListener(
+        "task-state-changed",
+        handleTaskStateChanged
+      );
     };
   }, [handleTaskStateChanged]);
 
@@ -249,14 +265,19 @@ function App() {
                           {task.state}
                         </span>
                       </div>
-                      {task.result && (
-                        <div className="bg-gray-50 p-3 rounded-md font-mono text-sm overflow-auto max-h-64 whitespace-pre-wrap">
-                          {task.error ||
-                            task.result.text ||
-                            ((task.state === "stopped" ||
-                              task.state === "stopping") &&
-                              "Task is being stopped...")}
+                      {task.error ? (
+                        <div className="bg-red-50 border border-red-200 p-3 rounded-md font-mono text-sm overflow-auto max-h-64 whitespace-pre-wrap text-red-600">
+                          {task.error}
                         </div>
+                      ) : (
+                        task.result && (
+                          <div className="bg-gray-50 p-3 rounded-md font-mono text-sm overflow-auto max-h-64 whitespace-pre-wrap">
+                            {task.result.text ||
+                              ((task.state === "stopped" ||
+                                task.state === "stopping") &&
+                                "Task is being stopped...")}
+                          </div>
+                        )
                       )}
                     </div>
                   ))}

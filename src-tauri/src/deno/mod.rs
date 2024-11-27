@@ -137,6 +137,9 @@ pub async fn run(
         if result.is_err() {
             println!("Failed to emit task state changed");
         }
+        std::fs::remove_file(&temp_code_path).unwrap();
+
+        return Ok(());
     }
 
     let result = worker.run_event_loop(false).await;
@@ -151,13 +154,15 @@ pub async fn run(
         if result.is_err() {
             println!("Failed to emit task state changed");
         }
+        std::fs::remove_file(&temp_code_path).unwrap();
+        return Ok(());
     }
-
-    std::fs::remove_file(&temp_code_path).unwrap();
 
     let mut state_lock = TASK_STATE.lock().unwrap();
     let task_state = state_lock.get_mut(task_id).unwrap();
     task_state.state = "completed".to_string();
+
+    std::fs::remove_file(&temp_code_path).unwrap();
 
     let result = app_handle.emit("task-state-changed", task_state.clone());
     if result.is_err() {
