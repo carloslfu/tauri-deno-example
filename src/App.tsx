@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { FaSpinner, FaStop, FaPlay } from "react-icons/fa";
+import { LuBan } from "react-icons/lu";
 
 import { nanoid } from "./lib/nanoid";
 
@@ -78,7 +79,7 @@ console.log(post)
 
 // write it to a file on the desktop by path
 
-const path = await Deno.cwd()
+const path = RuntimeExtension.documentDir()
 
 console.log(path)
 
@@ -236,7 +237,7 @@ function App() {
             />
             <button
               onClick={() => handleRunCode()}
-              className="mt-3 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md transition-colors"
+              className="mt-3 w-fit bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md transition-colors"
             >
               Run Code
             </button>
@@ -319,16 +320,18 @@ function App() {
                                 onClick={() =>
                                   handlePermissionResponse(task.id, "Allow")
                                 }
-                                className="bg-green-500 hover:bg-green-600 text-white text-sm py-1 px-3 rounded"
+                                className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1 px-3 rounded inline-flex items-center gap-1"
                               >
+                                <FaPlay className="text-xs" />
                                 Allow
                               </button>
                               <button
                                 onClick={() =>
                                   handlePermissionResponse(task.id, "Deny")
                                 }
-                                className="bg-red-500 hover:bg-red-600 text-white text-sm py-1 px-3 rounded"
+                                className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm py-1 px-3 rounded inline-flex items-center gap-1"
                               >
+                                <LuBan className="text-xs" />
                                 Deny
                               </button>
                               {task.permissionPrompt.is_unary && (
@@ -339,8 +342,9 @@ function App() {
                                       "AllowAll"
                                     )
                                   }
-                                  className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1 px-3 rounded"
+                                  className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm py-1 px-3 rounded inline-flex items-center gap-1"
                                 >
+                                  <FaPlay className="text-xs" />
                                   Allow All
                                 </button>
                               )}
