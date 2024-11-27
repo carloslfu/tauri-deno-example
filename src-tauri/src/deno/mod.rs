@@ -28,15 +28,84 @@ use module_loader::TypescriptModuleLoader;
 use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter};
 
-static PERMISSION_CHANNELS: Lazy<Mutex<HashMap<String, Sender<PromptResponse>>>> =
+#[derive(Debug, Clone)]
+pub enum PermissionsResponse {
+    Allow,
+    Deny,
+    AllowAll,
+}
+
+impl PermissionsResponse {
+    pub fn as_str(&self) -> &str {
+        match self {
+            PermissionsResponse::Allow => "Allow",
+            PermissionsResponse::Deny => "Deny",
+            PermissionsResponse::AllowAll => "AllowAll",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "Allow" => PermissionsResponse::Allow,
+            "Deny" => PermissionsResponse::Deny,
+            "AllowAll" => PermissionsResponse::AllowAll,
+            _ => panic!("Invalid permissions response: {}", s),
+        }
+    }
+
+    pub fn to_prompt_response(&self) -> PromptResponse {
+        match self {
+            PermissionsResponse::Allow => PromptResponse::Allow,
+            PermissionsResponse::Deny => PromptResponse::Deny,
+            PermissionsResponse::AllowAll => PromptResponse::AllowAll,
+        }
+    }
+}
+
+impl serde::Serialize for PermissionsResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PermissionsResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::from_str(&s))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PermissionPrompt {
+    message: String,
+    name: String,
+    api_name: Option<String>,
+    is_unary: bool,
+    response: Option<PermissionsResponse>,
+}
+
+static PERMISSION_CHANNELS: Lazy<Mutex<HashMap<String, Sender<PermissionsResponse>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+static PERMISSION_HISTORY: Lazy<Mutex<HashMap<String, Vec<PermissionPrompt>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+static LATEST_PROMPTS: Lazy<Mutex<HashMap<String, PermissionPrompt>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TaskState {
     id: String,
-    state: String,
+    state: String, // running, completed, error, stopped
     error: String,
     return_value: String,
+    permission_prompt: Option<PermissionPrompt>,
 }
 
 impl TaskState {
@@ -46,6 +115,7 @@ impl TaskState {
             state: initial_state,
             error: "".to_string(),
             return_value: "".to_string(),
+            permission_prompt: None,
         }
     }
 }
@@ -103,7 +173,17 @@ pub async fn run(
         .unwrap()
         .insert(task_id.to_string(), tx);
 
-    set_prompter(Box::new(CustomPrompter::new(task_id.to_string(), rx)));
+    // Initialize permission history for this task
+    PERMISSION_HISTORY
+        .lock()
+        .unwrap()
+        .insert(task_id.to_string(), Vec::new());
+
+    set_prompter(Box::new(CustomPrompter::new(
+        &app_handle,
+        task_id.to_string(),
+        rx,
+    )));
 
     let mut worker = MainWorker::bootstrap_from_options(
         main_module.clone(),
@@ -180,8 +260,10 @@ pub async fn run(
         println!("Failed to emit task state changed");
     }
 
-    // Clean up permission channel
+    // Clean up permission channel and history
     PERMISSION_CHANNELS.lock().unwrap().remove(task_id);
+    LATEST_PROMPTS.lock().unwrap().remove(task_id);
+    PERMISSION_HISTORY.lock().unwrap().remove(task_id);
 
     Ok(())
 }
@@ -206,20 +288,42 @@ pub fn update_task_state(app_handle: &AppHandle, task_id: &str, state: &str) {
     }
 }
 
-pub fn respond_to_permission(task_id: &str, response: PromptResponse) {
+pub fn respond_to_permission(task_id: &str, response: PermissionsResponse) {
     if let Some(tx) = PERMISSION_CHANNELS.lock().unwrap().get(task_id) {
+        // Update the latest prompt with the response
+        if let Some(mut prompt) = LATEST_PROMPTS.lock().unwrap().get_mut(task_id) {
+            prompt.response = Some(response.clone());
+        }
+
+        // Update the permission history
+        if let Some(history) = PERMISSION_HISTORY.lock().unwrap().get_mut(task_id) {
+            if let Some(last) = history.last_mut() {
+                last.response = Some(response.clone());
+            }
+        }
+
         let _ = tx.send(response);
     }
 }
 
+pub fn get_permission_prompt(task_id: &str) -> Option<PermissionPrompt> {
+    LATEST_PROMPTS.lock().unwrap().get(task_id).cloned()
+}
+
 struct CustomPrompter {
+    app_handle: AppHandle,
     task_id: String,
-    receiver: Arc<Mutex<Receiver<PromptResponse>>>,
+    receiver: Arc<Mutex<Receiver<PermissionsResponse>>>,
 }
 
 impl CustomPrompter {
-    fn new(task_id: String, receiver: Receiver<PromptResponse>) -> Self {
+    fn new(
+        app_handle: &AppHandle,
+        task_id: String,
+        receiver: Receiver<PermissionsResponse>,
+    ) -> Self {
         Self {
+            app_handle: app_handle.clone(),
             task_id,
             receiver: Arc::new(Mutex::new(receiver)),
         }
@@ -234,6 +338,25 @@ impl PermissionPrompter for CustomPrompter {
         api_name: Option<&str>,
         is_unary: bool,
     ) -> PromptResponse {
+        let prompt = PermissionPrompt {
+            message: message.to_string(),
+            name: name.to_string(),
+            api_name: api_name.map(|s| s.to_string()),
+            is_unary,
+            response: None,
+        };
+
+        // Store as latest prompt
+        LATEST_PROMPTS
+            .lock()
+            .unwrap()
+            .insert(self.task_id.clone(), prompt.clone());
+
+        // Add to history
+        if let Some(history) = PERMISSION_HISTORY.lock().unwrap().get_mut(&self.task_id) {
+            history.push(prompt);
+        }
+
         println!(
             "{}\n{} {}\n{} {}\n{} {:?}\n{} {:?}\n{} {}",
             "Script is trying to access APIs and needs permission:",
@@ -250,7 +373,7 @@ impl PermissionPrompter for CustomPrompter {
         );
 
         match self.receiver.lock().unwrap().recv() {
-            Ok(response) => response,
+            Ok(response) => response.to_prompt_response(),
             Err(_) => PromptResponse::Deny,
         }
     }
