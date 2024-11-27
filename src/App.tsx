@@ -315,6 +315,14 @@ function App() {
                             <p className="text-sm text-orange-700 mb-2">
                               {task.permissionPrompt.message}
                             </p>
+                            <div className="text-sm text-orange-700 mb-2">
+                              <div>Name: {task.permissionPrompt.name}</div>
+                              <div>API: {task.permissionPrompt.api_name}</div>
+                              <div>
+                                Unary:{" "}
+                                {task.permissionPrompt.is_unary ? "Yes" : "No"}
+                              </div>
+                            </div>
                             <div className="flex gap-2">
                               <button
                                 onClick={() =>
