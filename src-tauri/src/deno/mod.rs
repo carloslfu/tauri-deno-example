@@ -343,8 +343,16 @@ impl PermissionPrompter for CustomPrompter {
         update_task_state(&self.app_handle, &self.task_id, "waiting_for_permission");
 
         match self.receiver.lock().unwrap().recv() {
-            Ok(response) => response.to_prompt_response(),
-            Err(_) => PromptResponse::Deny,
+            Ok(response) => {
+                update_task_state(&self.app_handle, &self.task_id, "running");
+
+                response.to_prompt_response()
+            }
+            Err(_) => {
+                update_task_state(&self.app_handle, &self.task_id, "error");
+
+                PromptResponse::Deny
+            }
         }
     }
 }
