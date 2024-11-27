@@ -40,7 +40,7 @@ fn run_task(task_id: &str, code: &str) -> Result<(), String> {
             tokio::select! {
                 _ = deno::run(&task_id_clone, &code) => {},
                 _ = stop_rx => {
-                    println!("Task cancelled");
+                    println!("Task stopped");
                 }
             }
         });
@@ -126,9 +126,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
-            println!("Setting app handle - root");
             deno::set_app_handle(app.handle().clone());
-            println!("App handle set - root");
 
             Ok(())
         })

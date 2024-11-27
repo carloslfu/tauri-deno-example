@@ -174,7 +174,6 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
     std::fs::write(&temp_code_path, augmented_code).unwrap();
 
     let main_module = ModuleSpecifier::from_file_path(&temp_code_path).unwrap();
-    println!("Running {main_module}...");
 
     let fs = Arc::new(RealFs);
     let permission_desc_parser = Arc::new(RuntimePermissionDescriptorParser::new(fs.clone()));
@@ -285,7 +284,6 @@ pub fn clear_completed_tasks() {
 }
 
 pub fn update_task_state(task_id: &str, state: &str) {
-    println!("Updating task state --");
     let mut state_lock = TASK_STATE.lock().unwrap();
     let task = state_lock.get_mut(task_id).unwrap();
     task.state = state.to_string();
@@ -293,22 +291,14 @@ pub fn update_task_state(task_id: &str, state: &str) {
     let task_clone = task.clone();
     drop(state_lock);
 
-    println!("Emitting task state changed -- 2");
     emit_task_state_changed(task_clone);
 }
 
 fn emit_task_state_changed(task: Task) {
-    println!(
-        "Emitting task state changed to channel, task_id: {}, state: {}",
-        task.id, task.state
-    );
-
     let result = TAURI_TASK_EVENTS.0.send(task);
     if result.is_err() {
         println!("Failed to send task state changed");
     }
-
-    println!("Task state changed emitted 2 --");
 }
 
 pub fn respond_to_permission_prompt(task_id: &str, response: PermissionsResponse) {
@@ -362,7 +352,7 @@ impl PermissionPrompter for CustomPrompter {
             response: None,
         };
 
-        println!("Prompting for permission: {}", prompt.message);
+        println!("Prompting for permission: {}", prompt);
 
         let mut state_lock = TASK_STATE.lock().unwrap();
         if let Some(task) = state_lock.get_mut(&self.task_id) {
@@ -373,11 +363,7 @@ impl PermissionPrompter for CustomPrompter {
         }
         drop(state_lock);
 
-        println!("Emitting ----");
-
         update_task_state(&self.task_id, "waiting_for_permission");
-
-        println!("Waiting for permission response...");
 
         match self.receiver.lock().unwrap().recv() {
             Ok(response) => {
