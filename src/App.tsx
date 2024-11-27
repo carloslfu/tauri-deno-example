@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
-import { FaSpinner, FaStop } from "react-icons/fa";
+import { FaSpinner, FaStop, FaPlay } from "react-icons/fa";
 
 import { nanoid } from "./lib/nanoid";
 
@@ -17,8 +17,11 @@ const initialCode = `import * as cowsay from "https://esm.sh/cowsay@1.6.0"
 
 console.log("-- taskId", RuntimeExtension.taskId)
 
+// fetch a user name from an example json api
+const user = await fetch("https://jsonplaceholder.typicode.com/users/1").then(r => r.json())
+
 const text = cowsay.say({
-  text: \`Hey! 🤠 (taskId: \${RuntimeExtension.taskId})\`,
+  text: \`Hey \${user.name}! 🤠 (taskId: \${RuntimeExtension.taskId})\`,
 })
 
 console.log(text)
@@ -97,11 +100,11 @@ function App() {
     return () => clearInterval(interval);
   }, [isPolling, tasks]);
 
-  const handleRunCode = async () => {
+  const handleRunCode = async (codeToRun?: string) => {
     const newTaskId = nanoid();
     const newTask: Task = {
       id: newTaskId,
-      code,
+      code: codeToRun || code,
       status: "running",
     };
 
@@ -113,7 +116,7 @@ function App() {
 
       await invoke("run_code", {
         taskId: newTaskId,
-        code,
+        code: codeToRun || code,
       });
     } catch (error) {
       console.error("Failed to run code:", error);
@@ -125,6 +128,10 @@ function App() {
         )
       );
     }
+  };
+
+  const handleReplayTask = (taskCode: string) => {
+    handleRunCode(taskCode);
   };
 
   const handleStopTask = async (taskId: string) => {
@@ -166,7 +173,7 @@ function App() {
               onChange={(value) => setCode(value)}
             />
             <button
-              onClick={handleRunCode}
+              onClick={() => handleRunCode()}
               className="mt-3 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md transition-colors"
             >
               Run Code
@@ -189,7 +196,7 @@ function App() {
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-sm">{task.id}</span>
-                          {task.status === "running" && (
+                          {task.status === "running" ? (
                             <>
                               <FaSpinner className="animate-spin text-blue-500" />
                               <button
@@ -199,6 +206,14 @@ function App() {
                                 <FaStop />
                               </button>
                             </>
+                          ) : (
+                            <button
+                              onClick={() => handleReplayTask(task.code)}
+                              className="text-green-500 hover:text-green-600"
+                              title="Replay this task"
+                            >
+                              <FaPlay />
+                            </button>
                           )}
                         </div>
                         <span
