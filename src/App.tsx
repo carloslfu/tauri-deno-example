@@ -60,34 +60,35 @@ const initialCode = `import * as cowsay from "https://esm.sh/cowsay@1.6.0"
 console.log("-- taskId", RuntimeExtension.taskId)
 
 // fetch a random user name from an example json api
+const randomUserId = Math.floor(Math.random() * 10) + 1
+const user = await fetch(\`https://jsonplaceholder.typicode.com/users/\${randomUserId}\`).then(r => r.json())
 
-// const randomUserId = Math.floor(Math.random() * 10) + 1
+const text = cowsay.say({
+  text: \`Hey \${user.name}! 🤠 (taskId: \${RuntimeExtension.taskId})\`,
+})
 
-// const user = await fetch(\`https://jsonplaceholder.typicode.com/users/\${randomUserId}\`).then(r => r.json())
+console.log(text)
 
-// const text = cowsay.say({
-//   text: \`Hey \${user.name}! 🤠 (taskId: \${RuntimeExtension.taskId})\`,
-// })
-
-// console.log(text)
-
-// access too a post
+// get a post
 
 const post = await fetch("https://jsonplaceholder.typicode.com/posts/1").then(r => r.json())
 
-console.log(post)
+console.log("post", post)
 
 // write it to a file on the desktop by path
 
 const path = RuntimeExtension.documentDir()
 
-console.log(path)
+console.log("path", path)
 
-await Deno.writeTextFile(\`\${path}/post.json\`, JSON.stringify(post))
+await Deno.writeTextFile(\`\${path}/post.json\`, JSON.stringify({
+  text,
+  post,
+}))
 
 console.log("done")
 
-RuntimeExtension.returnValue({ text: "", post })
+RuntimeExtension.returnValue({ text, post })
 
 // wait 5 seconds
 await new Promise((resolve) => setTimeout(resolve, 5000))

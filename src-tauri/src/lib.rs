@@ -126,7 +126,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
-            deno::set_app_handle(app.handle().clone());
+            deno::init_listener(app.handle().clone());
 
             Ok(())
         })

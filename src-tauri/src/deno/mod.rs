@@ -6,10 +6,10 @@ mod module_loader;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use deno_runtime::deno_core::error::AnyError;
 use deno_runtime::deno_core::op2;
 use deno_runtime::deno_core::ModuleSpecifier;
@@ -28,9 +28,9 @@ use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter};
 
 // Task events channel for task state changes that will be received by Tauri
-static TAURI_TASK_EVENTS: Lazy<(Sender<Task>, Mutex<Receiver<Task>>)> = Lazy::new(|| {
-    let (tx, rx) = channel();
-    (tx, Mutex::new(rx))
+static TAURI_TASK_EVENTS: Lazy<(Sender<Task>, Receiver<Task>)> = Lazy::new(|| {
+    let (tx, rx) = unbounded();
+    (tx, rx)
 });
 
 #[derive(Debug, Clone)]
@@ -143,12 +143,12 @@ deno_runtime::deno_core::extension!(
   esm = [dir "src/deno", "bootstrap.js"]
 );
 
-pub fn set_app_handle(app_handle: AppHandle) {
+pub fn init_listener(app_handle: AppHandle) {
     let app_handle_clone = app_handle.clone();
 
     // Use Tauri's existing runtime instead of creating a new one
     tauri::async_runtime::spawn(async move {
-        while let Ok(task) = TAURI_TASK_EVENTS.1.lock().unwrap().recv() {
+        while let Ok(task) = TAURI_TASK_EVENTS.1.recv() {
             let result = app_handle_clone.emit("task-state-changed", task);
             if result.is_err() {
                 println!("Failed to emit task state changed");
@@ -184,7 +184,7 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
         PermissionsContainer::new(permission_desc_parser, Permissions::none_with_prompt());
 
     // Create channel for permission prompts
-    let (tx, rx) = channel();
+    let (tx, rx) = unbounded();
     PERMISSION_CHANNELS
         .lock()
         .unwrap()

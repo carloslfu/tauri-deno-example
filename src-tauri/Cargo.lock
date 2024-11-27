@@ -7791,6 +7791,7 @@ name = "tauri_deno_example"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "deno_ast 0.43.1",
  "deno_core",
  "deno_fs",
