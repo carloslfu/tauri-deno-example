@@ -11,6 +11,7 @@ interface Task {
   code: string;
   status: "running" | "completed" | "error";
   result?: Record<string, any>;
+  error?: string;
 }
 
 const initialCode = `import * as cowsay from "https://esm.sh/cowsay@1.6.0"
@@ -49,35 +50,51 @@ function App() {
           try {
             console.log("-- polling", task.id);
 
-            const result = await invoke("get_return_value", {
+            const taskState = await invoke("get_task_state", {
               taskId: task.id,
             });
 
-            console.log("-- result", task.id, result);
+            console.log("-- task state", task.id, taskState);
 
-            let parsedResult: Record<string, any>;
-            try {
-              parsedResult = JSON.parse(result as string);
-            } catch (error) {
-              parsedResult = {
-                error,
-                result,
-              };
-            }
+            if ((taskState as any).state === "completed") {
+              const returnValue = (taskState as any).return_value;
+              let parsedResult: Record<string, any>;
+              try {
+                parsedResult = JSON.parse(returnValue);
+              } catch (error) {
+                parsedResult = {
+                  error,
+                  result: returnValue,
+                };
+              }
 
-            setTasks((prev) =>
-              prev.map((t) =>
-                t.id === task.id
-                  ? { ...t, status: "completed", result: parsedResult }
-                  : t
-              )
-            );
+              setTasks((prev) =>
+                prev.map((t) =>
+                  t.id === task.id
+                    ? { ...t, status: "completed", result: parsedResult }
+                    : t
+                )
+              );
 
-            if (task.id === tasks[tasks.length - 1]?.id) {
-              setResult(parsedResult);
+              if (task.id === tasks[tasks.length - 1]?.id) {
+                setResult(parsedResult);
+              }
+            } else if ((taskState as any).state === "error") {
+              setTasks((prev) =>
+                prev.map((t) =>
+                  t.id === task.id
+                    ? {
+                        ...t,
+                        status: "error",
+                        error: (taskState as any).error,
+                        result: { error: (taskState as any).error },
+                      }
+                    : t
+                )
+              );
             }
           } catch (error) {
-            if ((error as string) !== "Task still running") {
+            if ((error as string) === "Task not found") {
               setTasks((prev) =>
                 prev.map((t) =>
                   t.id === task.id
@@ -86,7 +103,7 @@ function App() {
                 )
               );
             } else {
-              console.log("Task still running");
+              console.log("Error polling task:", error);
             }
           }
         }
@@ -122,9 +139,7 @@ function App() {
       console.error("Failed to run code:", error);
       setTasks((prev) =>
         prev.map((t) =>
-          t.id === newTaskId
-            ? { ...t, status: "error", result: { error, result } }
-            : t
+          t.id === newTaskId ? { ...t, status: "error", result: { error } } : t
         )
       );
     }
@@ -155,6 +170,7 @@ function App() {
 
   const handleClearCompletedTasks = () => {
     setTasks((prev) => prev.filter((t) => t.status === "running"));
+    invoke("clear_completed_tasks");
   };
 
   return (
@@ -230,7 +246,7 @@ function App() {
                       </div>
                       {task.result && (
                         <div className="bg-gray-50 p-3 rounded-md font-mono text-sm overflow-auto max-h-64 whitespace-pre-wrap">
-                          {task.result.text}
+                          {task.error || task.result.text}
                         </div>
                       )}
                     </div>

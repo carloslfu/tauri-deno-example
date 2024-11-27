@@ -13,8 +13,11 @@ use deno_runtime::deno_core::error::AnyError;
 use deno_runtime::deno_core::op2;
 use deno_runtime::deno_core::ModuleSpecifier;
 use deno_runtime::deno_fs::RealFs;
+use deno_runtime::deno_permissions::set_prompter;
+use deno_runtime::deno_permissions::PermissionPrompter;
 use deno_runtime::deno_permissions::Permissions;
 use deno_runtime::deno_permissions::PermissionsContainer;
+use deno_runtime::deno_permissions::PromptResponse;
 use deno_runtime::permissions::RuntimePermissionDescriptorParser;
 use deno_runtime::worker::MainWorker;
 use deno_runtime::worker::WorkerOptions;
@@ -23,15 +26,31 @@ use module_loader::TypescriptModuleLoader;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
-static RETURN_VALUES: Lazy<Mutex<HashMap<String, String>>> =
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TaskState {
+    state: String,
+    error: String,
+    return_value: String,
+}
+
+impl TaskState {
+    fn new(initial_state: String) -> Self {
+        Self {
+            state: initial_state,
+            error: "".to_string(),
+            return_value: "".to_string(),
+        }
+    }
+}
+
+static TASK_STATE: Lazy<Mutex<HashMap<String, TaskState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[op2(fast)]
 fn return_value(#[string] task_id: &str, #[string] value: &str) {
-    RETURN_VALUES
-        .lock()
-        .unwrap()
-        .insert(task_id.to_string(), value.to_string());
+    let mut state_lock = TASK_STATE.lock().unwrap();
+    let task_state = state_lock.get_mut(task_id).unwrap();
+    task_state.return_value = value.to_string();
 }
 
 deno_runtime::deno_core::extension!(
@@ -62,7 +81,9 @@ pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyEr
     let source_map_store = Rc::new(RefCell::new(HashMap::new()));
 
     let permission_container =
-        PermissionsContainer::new(permission_desc_parser, Permissions::allow_all());
+        PermissionsContainer::new(permission_desc_parser, Permissions::none_with_prompt());
+
+    set_prompter(Box::new(CustomPrompter::new(task_id.to_string())));
 
     let mut worker = MainWorker::bootstrap_from_options(
         main_module.clone(),
@@ -90,37 +111,90 @@ pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyEr
         },
     );
 
+    // initialize task state
+    TASK_STATE
+        .lock()
+        .unwrap()
+        .insert(task_id.to_string(), TaskState::new("running".to_string()));
+
     let result = worker.execute_main_module(&main_module).await;
     if let Err(e) = result {
-        RETURN_VALUES
-            .lock()
-            .unwrap()
-            .insert(task_id.to_string(), e.to_string());
+        let mut state_lock = TASK_STATE.lock().unwrap();
+        let task_state = state_lock.get_mut(task_id).unwrap();
+        task_state.state = "error".to_string();
+        task_state.error = e.to_string();
     }
 
     let result = worker.run_event_loop(false).await;
 
     if let Err(e) = result {
-        RETURN_VALUES
-            .lock()
-            .unwrap()
-            .insert(task_id.to_string(), e.to_string());
+        let mut state_lock = TASK_STATE.lock().unwrap();
+        let task_state = state_lock.get_mut(task_id).unwrap();
+        task_state.state = "error".to_string();
+        task_state.error = e.to_string();
     }
 
     std::fs::remove_file(&temp_code_path).unwrap();
 
+    let mut state_lock = TASK_STATE.lock().unwrap();
+    let task_state = state_lock.get_mut(task_id).unwrap();
+    task_state.state = "completed".to_string();
+
     Ok(())
 }
 
-pub fn get_return_value(task_id: &str) -> String {
-    RETURN_VALUES
-        .lock()
-        .unwrap()
-        .get(task_id)
-        .cloned()
-        .unwrap_or_default()
+pub fn get_task_state(task_id: &str) -> Option<TaskState> {
+    TASK_STATE.lock().unwrap().get(task_id).cloned()
 }
 
-pub fn clear_return_value(task_id: &str) {
-    RETURN_VALUES.lock().unwrap().remove(task_id);
+pub fn clear_completed_tasks() {
+    let mut state_lock = TASK_STATE.lock().unwrap();
+    state_lock.retain(|_, task_state| task_state.state == "running");
+}
+
+struct CustomPrompter {
+    task_id: String,
+}
+
+impl CustomPrompter {
+    fn new(task_id: String) -> Self {
+        Self { task_id }
+    }
+}
+
+impl PermissionPrompter for CustomPrompter {
+    fn prompt(
+        &mut self,
+        message: &str,
+        name: &str,
+        api_name: Option<&str>,
+        is_unary: bool,
+    ) -> PromptResponse {
+        println!(
+            "{}\n{} {}\n{} {}\n{} {:?}\n{} {:?}\n{} {}",
+            "Script is trying to access APIs and needs permission:",
+            "Task ID:",
+            self.task_id,
+            "Message:",
+            message,
+            "Name:",
+            name,
+            "API:",
+            api_name,
+            "Is unary:",
+            is_unary
+        );
+        println!("Allow? [y/n]");
+
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_ok() {
+            match input.trim().to_lowercase().as_str() {
+                "y" | "yes" => PromptResponse::Allow,
+                _ => PromptResponse::Deny,
+            }
+        } else {
+            println!("Failed to read input, denying permission");
+            PromptResponse::Deny
+        }
+    }
 }

@@ -100,19 +100,17 @@ fn stop_code(task_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_return_value(task_id: String) -> Result<String, String> {
-    let handles = THREAD_HANDLES.lock().unwrap();
+fn get_task_state(task_id: String) -> Result<deno::TaskState, String> {
+    let Some(task_state) = deno::get_task_state(&task_id) else {
+        return Err("Task not found".to_string());
+    };
 
-    // Check if thread is still running
-    if let Some(handle) = handles.get(&task_id) {
-        if !handle.is_finished() {
-            return Err("Task still running".to_string());
-        }
-    }
+    Ok(task_state)
+}
 
-    let return_value = deno::get_return_value(&task_id);
-    deno::clear_return_value(&task_id);
-    Ok(return_value)
+#[tauri::command]
+fn clear_completed_tasks() {
+    deno::clear_completed_tasks();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -124,7 +122,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             run_code,
             stop_code,
-            get_return_value
+            get_task_state,
+            clear_completed_tasks
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
