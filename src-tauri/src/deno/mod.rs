@@ -352,7 +352,7 @@ impl PermissionPrompter for CustomPrompter {
             response: None,
         };
 
-        println!("Prompting for permission: {}", prompt);
+        println!("Prompting for permission: {:?}", prompt);
 
         let mut state_lock = TASK_STATE.lock().unwrap();
         if let Some(task) = state_lock.get_mut(&self.task_id) {
