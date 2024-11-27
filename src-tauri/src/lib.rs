@@ -121,6 +121,11 @@ fn clear_completed_tasks() {
     deno::clear_completed_tasks();
 }
 
+#[tauri::command]
+fn respond_to_permission_prompt(task_id: String, response: String) {
+    deno::respond_to_permission_prompt(&task_id, deno::PermissionsResponse::from_str(&response));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -131,7 +136,8 @@ pub fn run() {
             run_task,
             stop_task,
             get_task_state,
-            clear_completed_tasks
+            clear_completed_tasks,
+            respond_to_permission_prompt
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

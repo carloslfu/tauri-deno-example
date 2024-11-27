@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { FaSpinner, FaStop, FaPlay } from "react-icons/fa";
@@ -10,16 +10,40 @@ import { nanoid } from "./lib/nanoid";
 type Task = {
   id: string;
   code: string;
-  state: "running" | "completed" | "error" | "stopped" | "stopping";
+  state:
+    | "running"
+    | "completed"
+    | "error"
+    | "stopped"
+    | "stopping"
+    | "waiting_for_permission";
   result?: Record<string, any>;
   error?: string;
+  permissionPrompt?: PermissionPrompt;
+  permissionHistory?: PermissionPrompt[];
+};
+
+type PermissionsResponse = "Allow" | "Deny" | "AllowAll";
+
+type PermissionPrompt = {
+  name: string;
+  api_name: string | undefined;
+  message: string;
+  is_unary: boolean;
 };
 
 type InternalTask = {
   id: string;
-  state: "running" | "completed" | "error" | "stopped";
+  state:
+    | "running"
+    | "completed"
+    | "error"
+    | "stopped"
+    | "waiting_for_permission";
   return_value?: string;
   error?: string;
+  permission_prompt?: PermissionPrompt;
+  permission_history?: PermissionPrompt[];
 };
 
 const eventTarget = new EventTarget();
@@ -92,6 +116,8 @@ function App() {
               state: task.state,
               result,
               error: task.error,
+              permissionPrompt: task.permission_prompt,
+              permissionHistory: task.permission_history,
             }
           : t
       )
@@ -175,6 +201,17 @@ function App() {
     }
   };
 
+  const handlePermissionResponse = async (
+    taskId: string,
+    response: PermissionsResponse
+  ) => {
+    try {
+      await invoke("respond_to_permission_prompt", { taskId, response });
+    } catch (error) {
+      console.error("Failed to respond to permission:", error);
+    }
+  };
+
   const handleClearCompletedTasks = () => {
     setTasks((prev) =>
       prev.filter((t) => t.state === "running" || t.state === "stopping")
@@ -239,7 +276,11 @@ function App() {
                               </span>
                             </>
                           )}
-                          {!["running", "stopping"].includes(task.state) && (
+                          {![
+                            "running",
+                            "stopping",
+                            "waiting_for_permission",
+                          ].includes(task.state) && (
                             <button
                               onClick={() => handleReplayTask(task)}
                               className="text-green-500 hover:text-green-600"
@@ -259,12 +300,53 @@ function App() {
                               ? "text-yellow-500"
                               : task.state === "stopping"
                               ? "text-yellow-500"
+                              : task.state === "waiting_for_permission"
+                              ? "text-orange-500"
                               : "text-blue-500"
                           }`}
                         >
                           {task.state}
                         </span>
                       </div>
+                      {task.state === "waiting_for_permission" &&
+                        task.permissionPrompt && (
+                          <div className="mb-3 bg-orange-50 border border-orange-200 p-3 rounded-md">
+                            <p className="text-sm text-orange-700 mb-2">
+                              {task.permissionPrompt.message}
+                            </p>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() =>
+                                  handlePermissionResponse(task.id, "Allow")
+                                }
+                                className="bg-green-500 hover:bg-green-600 text-white text-sm py-1 px-3 rounded"
+                              >
+                                Allow
+                              </button>
+                              <button
+                                onClick={() =>
+                                  handlePermissionResponse(task.id, "Deny")
+                                }
+                                className="bg-red-500 hover:bg-red-600 text-white text-sm py-1 px-3 rounded"
+                              >
+                                Deny
+                              </button>
+                              {task.permissionPrompt.is_unary && (
+                                <button
+                                  onClick={() =>
+                                    handlePermissionResponse(
+                                      task.id,
+                                      "AllowAll"
+                                    )
+                                  }
+                                  className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1 px-3 rounded"
+                                >
+                                  Allow All
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       {task.error ? (
                         <div className="bg-red-50 border border-red-200 p-3 rounded-md font-mono text-sm overflow-auto max-h-64 whitespace-pre-wrap text-red-600">
                           {task.error}

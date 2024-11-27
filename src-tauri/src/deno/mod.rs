@@ -93,19 +93,14 @@ pub struct PermissionPrompt {
 static PERMISSION_CHANNELS: Lazy<Mutex<HashMap<String, Sender<PermissionsResponse>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-static PERMISSION_HISTORY: Lazy<Mutex<HashMap<String, Vec<PermissionPrompt>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
-static LATEST_PROMPTS: Lazy<Mutex<HashMap<String, PermissionPrompt>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TaskState {
     id: String,
-    state: String, // running, completed, error, stopped
+    state: String, // running, completed, error, stopped, waiting_for_permission
     error: String,
     return_value: String,
     permission_prompt: Option<PermissionPrompt>,
+    permission_history: Vec<PermissionPrompt>,
 }
 
 impl TaskState {
@@ -116,6 +111,7 @@ impl TaskState {
             error: "".to_string(),
             return_value: "".to_string(),
             permission_prompt: None,
+            permission_history: Vec::new(),
         }
     }
 }
@@ -173,11 +169,11 @@ pub async fn run(
         .unwrap()
         .insert(task_id.to_string(), tx);
 
-    // Initialize permission history for this task
-    PERMISSION_HISTORY
-        .lock()
-        .unwrap()
-        .insert(task_id.to_string(), Vec::new());
+    // Initialize task state
+    TASK_STATE.lock().unwrap().insert(
+        task_id.to_string(),
+        TaskState::new(task_id.to_string(), "running".to_string()),
+    );
 
     set_prompter(Box::new(CustomPrompter::new(
         &app_handle,
@@ -209,12 +205,6 @@ pub async fn run(
             extensions: vec![runtime_extension::init_ops_and_esm()],
             ..Default::default()
         },
-    );
-
-    // initialize task state
-    TASK_STATE.lock().unwrap().insert(
-        task_id.to_string(),
-        TaskState::new(task_id.to_string(), "running".to_string()),
     );
 
     let result = worker.execute_main_module(&main_module).await;
@@ -260,10 +250,8 @@ pub async fn run(
         println!("Failed to emit task state changed");
     }
 
-    // Clean up permission channel and history
+    // Clean up permission channel
     PERMISSION_CHANNELS.lock().unwrap().remove(task_id);
-    LATEST_PROMPTS.lock().unwrap().remove(task_id);
-    PERMISSION_HISTORY.lock().unwrap().remove(task_id);
 
     Ok(())
 }
@@ -288,26 +276,23 @@ pub fn update_task_state(app_handle: &AppHandle, task_id: &str, state: &str) {
     }
 }
 
-pub fn respond_to_permission(task_id: &str, response: PermissionsResponse) {
+pub fn respond_to_permission_prompt(task_id: &str, response: PermissionsResponse) {
     if let Some(tx) = PERMISSION_CHANNELS.lock().unwrap().get(task_id) {
-        // Update the latest prompt with the response
-        if let Some(mut prompt) = LATEST_PROMPTS.lock().unwrap().get_mut(task_id) {
-            prompt.response = Some(response.clone());
-        }
+        let mut state_lock = TASK_STATE.lock().unwrap();
+        if let Some(task_state) = state_lock.get_mut(task_id) {
+            // Update the latest prompt with the response
+            if let Some(prompt) = &mut task_state.permission_prompt {
+                prompt.response = Some(response.clone());
+            }
 
-        // Update the permission history
-        if let Some(history) = PERMISSION_HISTORY.lock().unwrap().get_mut(task_id) {
-            if let Some(last) = history.last_mut() {
+            // Update the permission history
+            if let Some(last) = task_state.permission_history.last_mut() {
                 last.response = Some(response.clone());
             }
         }
 
         let _ = tx.send(response);
     }
-}
-
-pub fn get_permission_prompt(task_id: &str) -> Option<PermissionPrompt> {
-    LATEST_PROMPTS.lock().unwrap().get(task_id).cloned()
 }
 
 struct CustomPrompter {
@@ -346,31 +331,16 @@ impl PermissionPrompter for CustomPrompter {
             response: None,
         };
 
-        // Store as latest prompt
-        LATEST_PROMPTS
-            .lock()
-            .unwrap()
-            .insert(self.task_id.clone(), prompt.clone());
-
-        // Add to history
-        if let Some(history) = PERMISSION_HISTORY.lock().unwrap().get_mut(&self.task_id) {
-            history.push(prompt);
+        let mut state_lock = TASK_STATE.lock().unwrap();
+        if let Some(task_state) = state_lock.get_mut(&self.task_id) {
+            // Store as latest prompt
+            task_state.permission_prompt = Some(prompt.clone());
+            // Add to history
+            task_state.permission_history.push(prompt);
         }
 
-        println!(
-            "{}\n{} {}\n{} {}\n{} {:?}\n{} {:?}\n{} {}",
-            "Script is trying to access APIs and needs permission:",
-            "Task ID:",
-            self.task_id,
-            "Message:",
-            message,
-            "Name:",
-            name,
-            "API:",
-            api_name.unwrap_or(""),
-            "Is unary:",
-            is_unary
-        );
+        // Emit the task state changed event
+        update_task_state(&self.app_handle, &self.task_id, "waiting_for_permission");
 
         match self.receiver.lock().unwrap().recv() {
             Ok(response) => response.to_prompt_response(),
