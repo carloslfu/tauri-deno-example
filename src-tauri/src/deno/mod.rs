@@ -27,9 +27,6 @@ use module_loader::TypescriptModuleLoader;
 use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter};
 
-// Global app handle
-static APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
-
 // Task events channel for task state changes that will be received by Tauri
 static TAURI_TASK_EVENTS: Lazy<(Sender<Task>, Mutex<Receiver<Task>>)> = Lazy::new(|| {
     let (tx, rx) = channel();
@@ -133,37 +130,31 @@ fn return_value(#[string] task_id: &str, #[string] value: &str) {
     task.return_value = value.to_string();
 }
 
+#[op2]
+#[string]
+fn document_dir() -> Option<String> {
+    dirs::document_dir().map(|path| path.to_string_lossy().to_string())
+}
+
 deno_runtime::deno_core::extension!(
   runtime_extension,
-  ops = [return_value],
+  ops = [return_value, document_dir],
   esm_entry_point = "ext:runtime_extension/bootstrap.js",
   esm = [dir "src/deno", "bootstrap.js"]
 );
 
 pub fn set_app_handle(app_handle: AppHandle) {
-    println!("Setting app handle");
     let app_handle_clone = app_handle.clone();
-
-    *APP_HANDLE.lock().unwrap() = Some(app_handle);
-
-    println!("App handle set, spawning event handler");
 
     // Use Tauri's existing runtime instead of creating a new one
     tauri::async_runtime::spawn(async move {
-        println!("Spawned event handler");
         while let Ok(task) = TAURI_TASK_EVENTS.1.lock().unwrap().recv() {
-            println!("Received task state changed from channel, emitting...");
-
             let result = app_handle_clone.emit("task-state-changed", task);
             if result.is_err() {
                 println!("Failed to emit task state changed");
             }
-
-            println!("Task state changed emitted");
         }
     });
-
-    println!("after - Event handler spawned");
 }
 
 pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
