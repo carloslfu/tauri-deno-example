@@ -2,7 +2,7 @@
 
 ![Screenshot](screenshot.png)
 
-Example of using Tauri with `deno_runtime` to run multiple tasks in parallel. This repo showcases parallel code execution, cancelling tasks, and polling for results.
+Example of using Tauri with `deno_runtime` to run multiple tasks in parallel. This repo showcases parallel code execution, stopping tasks, handling permissions, and getting results.
 
 I use channels to stop tasks and hashmaps to store the return values and handles of the tasks.
 
