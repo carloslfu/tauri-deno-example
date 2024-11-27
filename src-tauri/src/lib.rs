@@ -80,19 +80,26 @@ fn stop_task(task_id: String) -> Result<(), String> {
         // Attempt to stop the thread
         std::thread::spawn(move || {
             // send shutdown message
-            SHUTDOWN_CHANNELS
+            let result = SHUTDOWN_CHANNELS
                 .lock()
                 .unwrap()
                 .remove(&task_id)
                 .unwrap()
-                .send(())
-                .map_err(|_| "Failed to send shutdown signal".to_string())?;
+                .send(());
+
+            if result.is_err() {
+                println!("Failed to send shutdown message");
+            }
 
             // Wait for thread to complete
             match handle.join() {
-                Ok(_) => Ok(()),
-                Err(_) => Err("Failed to stop thread".to_string()),
-            }
+                Ok(_) => {}
+                Err(_) => {
+                    println!("Failed to stop thread");
+                }
+            };
+
+            deno::update_task_state(&task_id, "stopped");
         });
     }
 

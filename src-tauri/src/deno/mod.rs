@@ -152,6 +152,12 @@ pub fn clear_completed_tasks() {
     state_lock.retain(|_, task_state| task_state.state == "running");
 }
 
+pub fn update_task_state(task_id: &str, state: &str) {
+    let mut state_lock = TASK_STATE.lock().unwrap();
+    let task_state = state_lock.get_mut(task_id).unwrap();
+    task_state.state = state.to_string();
+}
+
 struct CustomPrompter {
     task_id: String,
 }
