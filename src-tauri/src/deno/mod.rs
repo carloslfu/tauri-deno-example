@@ -94,7 +94,7 @@ static PERMISSION_CHANNELS: Lazy<Mutex<HashMap<String, Sender<PermissionsRespons
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TaskState {
+pub struct Task {
     id: String,
     state: String, // running, completed, error, stopped, waiting_for_permission
     error: String,
@@ -103,7 +103,7 @@ pub struct TaskState {
     permission_history: Vec<PermissionPrompt>,
 }
 
-impl TaskState {
+impl Task {
     fn new(id: String, initial_state: String) -> Self {
         Self {
             id,
@@ -116,14 +116,13 @@ impl TaskState {
     }
 }
 
-static TASK_STATE: Lazy<Mutex<HashMap<String, TaskState>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static TASK_STATE: Lazy<Mutex<HashMap<String, Task>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[op2(fast)]
 fn return_value(#[string] task_id: &str, #[string] value: &str) {
     let mut state_lock = TASK_STATE.lock().unwrap();
-    let task_state = state_lock.get_mut(task_id).unwrap();
-    task_state.return_value = value.to_string();
+    let task = state_lock.get_mut(task_id).unwrap();
+    task.return_value = value.to_string();
 }
 
 deno_runtime::deno_core::extension!(
@@ -172,7 +171,7 @@ pub async fn run(
     // Initialize task state
     TASK_STATE.lock().unwrap().insert(
         task_id.to_string(),
-        TaskState::new(task_id.to_string(), "running".to_string()),
+        Task::new(task_id.to_string(), "running".to_string()),
     );
 
     set_prompter(Box::new(CustomPrompter::new(
@@ -210,14 +209,11 @@ pub async fn run(
     let result = worker.execute_main_module(&main_module).await;
     if let Err(e) = result {
         let mut state_lock = TASK_STATE.lock().unwrap();
-        let task_state = state_lock.get_mut(task_id).unwrap();
-        task_state.state = "error".to_string();
-        task_state.error = e.to_string();
+        let task = state_lock.get_mut(task_id).unwrap();
+        task.state = "error".to_string();
+        task.error = e.to_string();
 
-        let result = app_handle.emit("task-state-changed", task_state.clone());
-        if result.is_err() {
-            println!("Failed to emit task state changed");
-        }
+        emit_task_state_changed(&app_handle, task.clone());
         std::fs::remove_file(&temp_code_path).unwrap();
 
         return Ok(());
@@ -227,28 +223,22 @@ pub async fn run(
 
     if let Err(e) = result {
         let mut state_lock = TASK_STATE.lock().unwrap();
-        let task_state = state_lock.get_mut(task_id).unwrap();
-        task_state.state = "error".to_string();
-        task_state.error = e.to_string();
+        let task = state_lock.get_mut(task_id).unwrap();
+        task.state = "error".to_string();
+        task.error = e.to_string();
 
-        let result = app_handle.emit("task-state-changed", task_state.clone());
-        if result.is_err() {
-            println!("Failed to emit task state changed");
-        }
+        emit_task_state_changed(&app_handle, task.clone());
         std::fs::remove_file(&temp_code_path).unwrap();
+
         return Ok(());
     }
 
     let mut state_lock = TASK_STATE.lock().unwrap();
-    let task_state = state_lock.get_mut(task_id).unwrap();
-    task_state.state = "completed".to_string();
+    let task = state_lock.get_mut(task_id).unwrap();
+    task.state = "completed".to_string();
 
     std::fs::remove_file(&temp_code_path).unwrap();
-
-    let result = app_handle.emit("task-state-changed", task_state.clone());
-    if result.is_err() {
-        println!("Failed to emit task state changed");
-    }
+    emit_task_state_changed(&app_handle, task.clone());
 
     // Clean up permission channel
     PERMISSION_CHANNELS.lock().unwrap().remove(task_id);
@@ -256,37 +246,46 @@ pub async fn run(
     Ok(())
 }
 
-pub fn get_task_state(task_id: &str) -> Option<TaskState> {
+pub fn get_task_state(task_id: &str) -> Option<Task> {
     TASK_STATE.lock().unwrap().get(task_id).cloned()
 }
 
 pub fn clear_completed_tasks() {
     let mut state_lock = TASK_STATE.lock().unwrap();
-    state_lock.retain(|_, task_state| task_state.state == "running");
+    state_lock.retain(|_, task| task.state == "running");
 }
 
 pub fn update_task_state(app_handle: &AppHandle, task_id: &str, state: &str) {
     let mut state_lock = TASK_STATE.lock().unwrap();
-    let task_state = state_lock.get_mut(task_id).unwrap();
-    task_state.state = state.to_string();
+    let task = state_lock.get_mut(task_id).unwrap();
+    task.state = state.to_string();
+    emit_task_state_changed(app_handle, task.clone());
+}
 
-    let result = app_handle.emit("task-state-changed", task_state.clone());
-    if result.is_err() {
-        println!("Failed to emit task state changed");
-    }
+fn emit_task_state_changed(app_handle: &AppHandle, task: Task) {
+    // Spawn a new thread to emit the event asynchronously
+    std::thread::spawn({
+        let app_handle = app_handle.clone();
+        move || {
+            let result = app_handle.emit("task-state-changed", task);
+            if result.is_err() {
+                println!("Failed to emit task state changed");
+            }
+        }
+    });
 }
 
 pub fn respond_to_permission_prompt(task_id: &str, response: PermissionsResponse) {
     if let Some(tx) = PERMISSION_CHANNELS.lock().unwrap().get(task_id) {
         let mut state_lock = TASK_STATE.lock().unwrap();
-        if let Some(task_state) = state_lock.get_mut(task_id) {
+        if let Some(task) = state_lock.get_mut(task_id) {
             // Update the latest prompt with the response
-            if let Some(prompt) = &mut task_state.permission_prompt {
+            if let Some(prompt) = &mut task.permission_prompt {
                 prompt.response = Some(response.clone());
             }
 
             // Update the permission history
-            if let Some(last) = task_state.permission_history.last_mut() {
+            if let Some(last) = task.permission_history.last_mut() {
                 last.response = Some(response.clone());
             }
         }
@@ -331,16 +330,20 @@ impl PermissionPrompter for CustomPrompter {
             response: None,
         };
 
+        println!("Prompting for permission: {}", prompt.message);
+
         let mut state_lock = TASK_STATE.lock().unwrap();
-        if let Some(task_state) = state_lock.get_mut(&self.task_id) {
+        if let Some(task) = state_lock.get_mut(&self.task_id) {
             // Store as latest prompt
-            task_state.permission_prompt = Some(prompt.clone());
+            task.permission_prompt = Some(prompt.clone());
             // Add to history
-            task_state.permission_history.push(prompt);
+            task.permission_history.push(prompt);
         }
 
         // Emit the task state changed event
         update_task_state(&self.app_handle, &self.task_id, "waiting_for_permission");
+
+        println!("Waiting for permission response...");
 
         match self.receiver.lock().unwrap().recv() {
             Ok(response) => {

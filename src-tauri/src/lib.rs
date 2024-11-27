@@ -108,7 +108,7 @@ fn stop_task(app_handle: tauri::AppHandle, task_id: String) -> Result<(), String
 }
 
 #[tauri::command]
-fn get_task_state(task_id: String) -> Result<deno::TaskState, String> {
+fn get_task_state(task_id: String) -> Result<deno::Task, String> {
     let Some(task_state) = deno::get_task_state(&task_id) else {
         return Err("Task not found".to_string());
     };
