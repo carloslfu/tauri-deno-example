@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use deno_runtime::deno_core::error::AnyError;
 use deno_runtime::deno_core::op2;
@@ -24,8 +26,10 @@ use deno_runtime::worker::WorkerOptions;
 use deno_runtime::worker::WorkerServiceOptions;
 use module_loader::TypescriptModuleLoader;
 use once_cell::sync::Lazy;
-use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
+
+static PERMISSION_CHANNELS: Lazy<Mutex<HashMap<String, Sender<PromptResponse>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TaskState {
@@ -92,7 +96,14 @@ pub async fn run(
     let permission_container =
         PermissionsContainer::new(permission_desc_parser, Permissions::none_with_prompt());
 
-    set_prompter(Box::new(CustomPrompter::new(task_id.to_string())));
+    // Create channel for permission prompts
+    let (tx, rx) = channel();
+    PERMISSION_CHANNELS
+        .lock()
+        .unwrap()
+        .insert(task_id.to_string(), tx);
+
+    set_prompter(Box::new(CustomPrompter::new(task_id.to_string(), rx)));
 
     let mut worker = MainWorker::bootstrap_from_options(
         main_module.clone(),
@@ -169,6 +180,9 @@ pub async fn run(
         println!("Failed to emit task state changed");
     }
 
+    // Clean up permission channel
+    PERMISSION_CHANNELS.lock().unwrap().remove(task_id);
+
     Ok(())
 }
 
@@ -192,13 +206,23 @@ pub fn update_task_state(app_handle: &AppHandle, task_id: &str, state: &str) {
     }
 }
 
+pub fn respond_to_permission(task_id: &str, response: PromptResponse) {
+    if let Some(tx) = PERMISSION_CHANNELS.lock().unwrap().get(task_id) {
+        let _ = tx.send(response);
+    }
+}
+
 struct CustomPrompter {
     task_id: String,
+    receiver: Arc<Mutex<Receiver<PromptResponse>>>,
 }
 
 impl CustomPrompter {
-    fn new(task_id: String) -> Self {
-        Self { task_id }
+    fn new(task_id: String, receiver: Receiver<PromptResponse>) -> Self {
+        Self {
+            task_id,
+            receiver: Arc::new(Mutex::new(receiver)),
+        }
     }
 }
 
@@ -220,23 +244,14 @@ impl PermissionPrompter for CustomPrompter {
             "Name:",
             name,
             "API:",
-            api_name,
+            api_name.unwrap_or(""),
             "Is unary:",
             is_unary
         );
-        // println!("Allow? [y/n]");
 
-        return PromptResponse::Allow;
-
-        // let mut input = String::new();
-        // if std::io::stdin().read_line(&mut input).is_ok() {
-        //     match input.trim().to_lowercase().as_str() {
-        //         "y" | "yes" => PromptResponse::Allow,
-        //         _ => PromptResponse::Deny,
-        //     }
-        // } else {
-        //     println!("Failed to read input, denying permission");
-        //     PromptResponse::Deny
-        // }
+        match self.receiver.lock().unwrap().recv() {
+            Ok(response) => response,
+            Err(_) => PromptResponse::Deny,
+        }
     }
 }

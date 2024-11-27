@@ -54,15 +54,15 @@ console.log(post)
 
 // write it to a file on the desktop by path
 
-const desktopPath = await Deno.desktopPath()
+const path = await Deno.cwd()
 
-console.log(desktopPath)
+console.log(path)
 
-await Deno.writeTextFile(\`\${desktopPath}/post.json\`, JSON.stringify(post))
+await Deno.writeTextFile(\`\${path}/post.json\`, JSON.stringify(post))
 
 console.log("done")
 
-RuntimeExtension.returnValue({ text, post })
+RuntimeExtension.returnValue({ text: "", post })
 
 // wait 5 seconds
 await new Promise((resolve) => setTimeout(resolve, 5000))
