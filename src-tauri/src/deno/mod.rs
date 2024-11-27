@@ -25,17 +25,20 @@ use deno_runtime::worker::WorkerServiceOptions;
 use module_loader::TypescriptModuleLoader;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
+use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TaskState {
+    id: String,
     state: String,
     error: String,
     return_value: String,
 }
 
 impl TaskState {
-    fn new(initial_state: String) -> Self {
+    fn new(id: String, initial_state: String) -> Self {
         Self {
+            id,
             state: initial_state,
             error: "".to_string(),
             return_value: "".to_string(),
@@ -60,7 +63,12 @@ deno_runtime::deno_core::extension!(
   esm = [dir "src/deno", "bootstrap.js"]
 );
 
-pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyError> {
+pub async fn run(
+    app_handle: AppHandle,
+    app_path: &Path,
+    task_id: &str,
+    code: &str,
+) -> Result<(), AnyError> {
     // create temp dir
     let temp_dir = std::env::temp_dir().join("tauri_deno_example");
     std::fs::create_dir_all(&temp_dir).unwrap();
@@ -75,6 +83,7 @@ pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyEr
 
     let main_module = ModuleSpecifier::from_file_path(&temp_code_path).unwrap();
     println!("Running {main_module}...");
+
     let fs = Arc::new(RealFs);
     let permission_desc_parser = Arc::new(RuntimePermissionDescriptorParser::new(fs.clone()));
 
@@ -112,10 +121,10 @@ pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyEr
     );
 
     // initialize task state
-    TASK_STATE
-        .lock()
-        .unwrap()
-        .insert(task_id.to_string(), TaskState::new("running".to_string()));
+    TASK_STATE.lock().unwrap().insert(
+        task_id.to_string(),
+        TaskState::new(task_id.to_string(), "running".to_string()),
+    );
 
     let result = worker.execute_main_module(&main_module).await;
     if let Err(e) = result {
@@ -123,6 +132,11 @@ pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyEr
         let task_state = state_lock.get_mut(task_id).unwrap();
         task_state.state = "error".to_string();
         task_state.error = e.to_string();
+
+        let result = app_handle.emit("task-state-changed", task_state.clone());
+        if result.is_err() {
+            println!("Failed to emit task state changed");
+        }
     }
 
     let result = worker.run_event_loop(false).await;
@@ -132,6 +146,11 @@ pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyEr
         let task_state = state_lock.get_mut(task_id).unwrap();
         task_state.state = "error".to_string();
         task_state.error = e.to_string();
+
+        let result = app_handle.emit("task-state-changed", task_state.clone());
+        if result.is_err() {
+            println!("Failed to emit task state changed");
+        }
     }
 
     std::fs::remove_file(&temp_code_path).unwrap();
@@ -139,6 +158,11 @@ pub async fn run(app_path: &Path, task_id: &str, code: &str) -> Result<(), AnyEr
     let mut state_lock = TASK_STATE.lock().unwrap();
     let task_state = state_lock.get_mut(task_id).unwrap();
     task_state.state = "completed".to_string();
+
+    let result = app_handle.emit("task-state-changed", task_state.clone());
+    if result.is_err() {
+        println!("Failed to emit task state changed");
+    }
 
     Ok(())
 }
@@ -152,10 +176,15 @@ pub fn clear_completed_tasks() {
     state_lock.retain(|_, task_state| task_state.state == "running");
 }
 
-pub fn update_task_state(task_id: &str, state: &str) {
+pub fn update_task_state(app_handle: &AppHandle, task_id: &str, state: &str) {
     let mut state_lock = TASK_STATE.lock().unwrap();
     let task_state = state_lock.get_mut(task_id).unwrap();
     task_state.state = state.to_string();
+
+    let result = app_handle.emit("task-state-changed", task_state.clone());
+    if result.is_err() {
+        println!("Failed to emit task state changed");
+    }
 }
 
 struct CustomPrompter {

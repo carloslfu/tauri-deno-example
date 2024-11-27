@@ -1,18 +1,26 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { FaSpinner, FaStop, FaPlay } from "react-icons/fa";
 
 import { nanoid } from "./lib/nanoid";
 
-interface Task {
+type Task = {
   id: string;
   code: string;
-  status: "running" | "completed" | "error" | "stopped";
+  state: "running" | "completed" | "error" | "stopped" | "stopping";
   result?: Record<string, any>;
   error?: string;
-}
+};
+
+type InternalTask = {
+  id: string;
+  state: "running" | "completed" | "error" | "stopped";
+  return_value?: string;
+  error?: string;
+};
 
 const initialCode = `import * as cowsay from "https://esm.sh/cowsay@1.6.0"
 
@@ -38,99 +46,67 @@ await new Promise((resolve) => setTimeout(resolve, 5000))
 
 function App() {
   const [code, setCode] = useState(initialCode);
-  const [result, setResult] = useState<Record<string, any> | null>(null);
+  const [result, setResult] = useState<Record<string, any> | undefined>();
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [isPolling, setIsPolling] = useState(false);
 
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
+  const handleTaskStateChanged = useCallback((task: InternalTask) => {
+    console.log("-- task state changed", task);
 
-    if (isPolling) {
-      interval = setInterval(async () => {
-        const runningTasks = tasks.filter((t) => t.status === "running");
+    let result: Record<string, any> | undefined;
 
-        for (const task of runningTasks) {
-          try {
-            console.log("-- polling", task.id);
-
-            const taskState = await invoke("get_task_state", {
-              taskId: task.id,
-            });
-
-            console.log("-- task state", task.id, taskState);
-
-            if ((taskState as any).state === "completed") {
-              const returnValue = (taskState as any).return_value;
-              let parsedResult: Record<string, any>;
-              try {
-                parsedResult = JSON.parse(returnValue);
-              } catch (error) {
-                parsedResult = {
-                  error,
-                  result: returnValue,
-                };
-              }
-
-              setTasks((prev) =>
-                prev.map((t) =>
-                  t.id === task.id
-                    ? { ...t, status: "completed", result: parsedResult }
-                    : t
-                )
-              );
-
-              if (task.id === tasks[tasks.length - 1]?.id) {
-                setResult(parsedResult);
-              }
-            } else if ((taskState as any).state === "error") {
-              setTasks((prev) =>
-                prev.map((t) =>
-                  t.id === task.id
-                    ? {
-                        ...t,
-                        status: "error",
-                        error: (taskState as any).error,
-                        result: { error: (taskState as any).error },
-                      }
-                    : t
-                )
-              );
-            }
-          } catch (error) {
-            if ((error as string) === "Task not found") {
-              setTasks((prev) =>
-                prev.map((t) =>
-                  t.id === task.id
-                    ? { ...t, status: "error", result: { error } }
-                    : t
-                )
-              );
-            } else {
-              console.log("Error polling task:", error);
-            }
-          }
-        }
-
-        if (runningTasks.length === 0) {
-          setIsPolling(false);
-        }
-      }, 2000);
+    if (task.return_value) {
+      result = JSON.parse(task.return_value);
     }
 
-    return () => clearInterval(interval);
-  }, [isPolling, tasks]);
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === task.id
+          ? {
+              ...t,
+              state: task.state,
+              result,
+              error: task.error,
+            }
+          : t
+      )
+    );
+
+    if (task.state === "completed") {
+      setResult(result);
+    }
+  }, []);
+
+  useEffect(() => {
+    let unsubscribe: UnlistenFn;
+
+    const subscribe = async () => {
+      unsubscribe = await listen<InternalTask>(
+        "task-state-changed",
+        (event) => {
+          handleTaskStateChanged(event.payload);
+        }
+      );
+    };
+
+    subscribe();
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [handleTaskStateChanged]);
 
   const handleRunCode = async (codeToRun?: string) => {
     const newTaskId = nanoid();
     const newTask: Task = {
       id: newTaskId,
       code: codeToRun || code,
-      status: "running",
+      state: "running",
     };
 
     try {
       setTasks((prev) => [...prev, newTask]);
-      setIsPolling(true);
 
       console.log("-- running code", newTaskId);
 
@@ -142,7 +118,7 @@ function App() {
       console.error("Failed to run code:", error);
       setTasks((prev) =>
         prev.map((t) =>
-          t.id === newTaskId ? { ...t, status: "error", result: { error } } : t
+          t.id === newTaskId ? { ...t, state: "error", result: { error } } : t
         )
       );
     }
@@ -150,10 +126,8 @@ function App() {
 
   const handleReplayTask = async (task: Task) => {
     setTasks((prev) =>
-      prev.map((t) => (t.id === task.id ? { ...t, status: "running" } : t))
+      prev.map((t) => (t.id === task.id ? { ...t, state: "running" } : t))
     );
-
-    setIsPolling(true);
 
     try {
       await invoke("run_task", {
@@ -163,7 +137,7 @@ function App() {
     } catch (error) {
       setTasks((prev) =>
         prev.map((t) =>
-          t.id === task.id ? { ...t, status: "error", result: { error } } : t
+          t.id === task.id ? { ...t, state: "error", result: { error } } : t
         )
       );
     }
@@ -171,14 +145,24 @@ function App() {
 
   const handleStopTask = async (taskId: string) => {
     try {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, state: "stopping" } : t))
+      );
       await invoke("stop_task", { taskId });
     } catch (error) {
       console.error("Failed to stop task:", error);
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskId ? { ...t, state: "error", result: { error } } : t
+        )
+      );
     }
   };
 
   const handleClearCompletedTasks = () => {
-    setTasks((prev) => prev.filter((t) => t.status === "running"));
+    setTasks((prev) =>
+      prev.filter((t) => t.state === "running" || t.state === "stopping")
+    );
     invoke("clear_completed_tasks");
   };
 
@@ -203,7 +187,6 @@ function App() {
             >
               Run Code
             </button>
-
             {tasks.length > 0 && (
               <div className="mt-4">
                 <div className="flex justify-between items-center mb-2">
@@ -221,7 +204,7 @@ function App() {
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-sm">{task.id}</span>
-                          {task.status === "running" ? (
+                          {task.state === "running" && (
                             <>
                               <FaSpinner className="animate-spin text-blue-500" />
                               <button
@@ -231,7 +214,16 @@ function App() {
                                 <FaStop />
                               </button>
                             </>
-                          ) : (
+                          )}
+                          {task.state === "stopping" && (
+                            <>
+                              <FaSpinner className="animate-spin text-yellow-500" />
+                              <span className="text-yellow-500 text-sm">
+                                Stopping...
+                              </span>
+                            </>
+                          )}
+                          {!["running", "stopping"].includes(task.state) && (
                             <button
                               onClick={() => handleReplayTask(task)}
                               className="text-green-500 hover:text-green-600"
@@ -243,19 +235,27 @@ function App() {
                         </div>
                         <span
                           className={`text-sm ${
-                            task.status === "completed"
+                            task.state === "completed"
                               ? "text-green-500"
-                              : task.status === "error"
+                              : task.state === "error"
                               ? "text-red-500"
+                              : task.state === "stopped"
+                              ? "text-yellow-500"
+                              : task.state === "stopping"
+                              ? "text-yellow-500"
                               : "text-blue-500"
                           }`}
                         >
-                          {task.status}
+                          {task.state}
                         </span>
                       </div>
                       {task.result && (
                         <div className="bg-gray-50 p-3 rounded-md font-mono text-sm overflow-auto max-h-64 whitespace-pre-wrap">
-                          {task.error || task.result.text}
+                          {task.error ||
+                            task.result.text ||
+                            ((task.state === "stopped" ||
+                              task.state === "stopping") &&
+                              "Task is being stopped...")}
                         </div>
                       )}
                     </div>
@@ -264,7 +264,7 @@ function App() {
               </div>
             )}
 
-            {result !== null && (
+            {result && (
               <div className="mt-4">
                 <h2 className="text-lg font-medium text-gray-900 mb-2">
                   Latest Result:

@@ -2,6 +2,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Manager;
+use tauri::{AppHandle, Emitter};
 
 mod deno;
 
@@ -45,7 +46,7 @@ fn run_task(app_handle: tauri::AppHandle, task_id: &str, code: &str) -> Result<(
 
         let task = runtime.block_on(async {
             tokio::select! {
-                _ = deno::run(&app_path, &task_id_clone, &code) => {},
+                _ = deno::run(app_handle, &app_path, &task_id_clone, &code) => {},
                 _ = stop_rx => {
                     println!("Task cancelled");
                 }
@@ -68,7 +69,7 @@ fn run_task(app_handle: tauri::AppHandle, task_id: &str, code: &str) -> Result<(
 }
 
 #[tauri::command]
-fn stop_task(task_id: String) -> Result<(), String> {
+fn stop_task(app_handle: tauri::AppHandle, task_id: String) -> Result<(), String> {
     let mut handles = THREAD_HANDLES.lock().unwrap();
 
     if let Some(handle) = handles.remove(&task_id) {
@@ -99,7 +100,7 @@ fn stop_task(task_id: String) -> Result<(), String> {
                 }
             };
 
-            deno::update_task_state(&task_id, "stopped");
+            deno::update_task_state(&app_handle, &task_id, "stopped");
         });
     }
 
