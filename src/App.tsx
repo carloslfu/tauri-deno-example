@@ -216,10 +216,19 @@ function App() {
 
   const handleClearCompletedTasks = () => {
     setTasks((prev) =>
-      prev.filter((t) => t.state === "running" || t.state === "stopping")
+      prev.filter(
+        (t) =>
+          t.state === "running" ||
+          t.state === "stopping" ||
+          t.state === "waiting_for_permission"
+      )
     );
     invoke("clear_completed_tasks");
   };
+
+  const isAnyTaskWaitingForPermissions = tasks.some(
+    (t) => t.state === "waiting_for_permission"
+  );
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -229,7 +238,7 @@ function App() {
             <h1 className="text-xl font-medium text-gray-900">Code Runner</h1>
           </div>
 
-          <div className="p-4">
+          <div className="flex flex-col gap-4 p-4">
             <CodeMirror
               value={code}
               height="200px"
@@ -238,10 +247,20 @@ function App() {
             />
             <button
               onClick={() => handleRunCode()}
-              className="mt-3 w-fit bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md transition-colors"
+              className="w-fit bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md transition-colors"
             >
               Run Code
             </button>
+            {isAnyTaskWaitingForPermissions && (
+              <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 p-3 rounded-md border border-amber-200">
+                <LuBan className="flex-shrink-0 w-5 h-5" />
+                <span>
+                  There are pending permission requests, it could block some
+                  tasks that might also need permissions from running due to a
+                  deno_runtime limitation. See the README for more details.
+                </span>
+              </div>
+            )}
             {tasks.length > 0 && (
               <div className="mt-4">
                 <div className="flex justify-between items-center mb-2">
