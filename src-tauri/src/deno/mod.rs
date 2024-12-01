@@ -111,7 +111,7 @@ static THREAD_TO_TASK_MAP: Lazy<Mutex<HashMap<thread::ThreadId, String>>> =
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Task {
     id: String,
-    state: String, // running, completed, error, stopped, waiting_for_permission
+    state: String, // running, completed, error, stopping, stopped, waiting_for_permission
     error: String,
     return_value: String,
     permission_prompt: Option<PermissionPrompt>,
@@ -412,7 +412,11 @@ pub fn get_task_state(task_id: &str) -> Option<Task> {
 
 pub fn clear_completed_tasks() {
     let mut state_lock = TASK_STATE.lock().unwrap();
-    state_lock.retain(|_, task| task.state == "running");
+    state_lock.retain(|_, task| {
+        task.state == "running"
+            || task.state == "stopping"
+            || task.state == "waiting_for_permission"
+    });
 }
 
 pub fn update_task_state(task_id: &str, state: &str) {
