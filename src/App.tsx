@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { FaSpinner, FaStop, FaPlay } from "react-icons/fa";
-import { LuBan } from "react-icons/lu";
+import { LuAlertTriangle, LuBan } from "react-icons/lu";
 
 import { nanoid } from "./lib/nanoid";
 
@@ -251,11 +251,12 @@ function App() {
             </button>
             {isAnyTaskWaitingForPermissions && (
               <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 p-3 rounded-md border border-amber-200">
-                <LuBan className="flex-shrink-0 w-5 h-5" />
+                <LuAlertTriangle className="flex-shrink-0 w-5 h-5" />
                 <span>
-                  There are pending permission requests, it could block some
-                  tasks that might also need permissions from running due to a
-                  deno_runtime limitation. See the README for more details.
+                  There are pending permission requests. Keep in mind that it
+                  could block some tasks that need permissions due to a
+                  `deno_runtime` limitation. Resolve them to avoid blocking
+                  other tasks. See the README for more details.
                 </span>
               </div>
             )}
