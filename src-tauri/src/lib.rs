@@ -72,6 +72,8 @@ fn stop_task(task_id: String) -> Result<(), String> {
 
         // Attempt to stop the thread
         std::thread::spawn(move || {
+            deno::update_task_state(&task_id, "stopping");
+
             // send shutdown message
             let result = SHUTDOWN_CHANNELS
                 .lock()

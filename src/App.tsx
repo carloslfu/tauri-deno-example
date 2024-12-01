@@ -39,6 +39,7 @@ type InternalTask = {
     | "running"
     | "completed"
     | "error"
+    | "stopping"
     | "stopped"
     | "waiting_for_permission";
   return_value?: string;
@@ -189,9 +190,6 @@ function App() {
 
   const handleStopTask = async (taskId: string) => {
     try {
-      setTasks((prev) =>
-        prev.map((t) => (t.id === taskId ? { ...t, state: "stopping" } : t))
-      );
       await invoke("stop_task", { taskId });
     } catch (error) {
       console.error("Failed to stop task:", error);
