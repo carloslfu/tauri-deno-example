@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::thread;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use deno_runtime::deno_core::error::AnyError;
@@ -95,7 +96,16 @@ pub struct PermissionPrompt {
     response: Option<PermissionsResponse>,
 }
 
-static PERMISSION_CHANNELS: Lazy<Mutex<HashMap<String, Sender<PermissionsResponse>>>> =
+static PERMISSION_CHANNELS: Lazy<Mutex<HashMap<thread::ThreadId, Sender<PermissionsResponse>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+static RECEIVER_MAP: Lazy<Mutex<HashMap<thread::ThreadId, Receiver<PermissionsResponse>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+static TASK_TO_THREAD_MAP: Lazy<Mutex<HashMap<String, thread::ThreadId>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+static THREAD_TO_TASK_MAP: Lazy<Mutex<HashMap<thread::ThreadId, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -157,6 +167,92 @@ pub fn init_listener(app_handle: AppHandle) {
     });
 }
 
+struct CustomPrompter;
+
+impl CustomPrompter {
+    fn register_receiver(thread_id: thread::ThreadId, receiver: Receiver<PermissionsResponse>) {
+        RECEIVER_MAP.lock().unwrap().insert(thread_id, receiver);
+    }
+
+    fn remove_receiver(thread_id: &thread::ThreadId) {
+        RECEIVER_MAP.lock().unwrap().remove(thread_id);
+    }
+}
+
+impl PermissionPrompter for CustomPrompter {
+    fn prompt(
+        &mut self,
+        message: &str,
+        name: &str,
+        api_name: Option<&str>,
+        is_unary: bool,
+    ) -> PromptResponse {
+        let thread_id = thread::current().id();
+        let prompt = PermissionPrompt {
+            message: message.to_string(),
+            name: name.to_string(),
+            api_name: api_name.map(|s| s.to_string()),
+            is_unary,
+            response: None,
+        };
+
+        println!("👀 Prompting for permission: {:?}", prompt);
+
+        let receiver = {
+            let receiver_map = RECEIVER_MAP.lock().unwrap();
+            receiver_map.get(&thread_id).cloned()
+        };
+
+        if let Some(receiver) = receiver {
+            let mut state_lock = TASK_STATE.lock().unwrap();
+
+            // Find task using thread_id
+            let task_id = THREAD_TO_TASK_MAP.lock().unwrap().get(&thread_id).cloned();
+
+            if let Some(task_id) = task_id {
+                if let Some(task) = state_lock.get_mut(&task_id) {
+                    println!("👀 Found task --");
+
+                    // Store as latest prompt
+                    task.permission_prompt = Some(prompt.clone());
+                    println!("👀 Stored as latest prompt --");
+
+                    // Add to history
+                    task.permission_history.push(prompt);
+                    println!("👀 Added to history --");
+
+                    drop(state_lock);
+
+                    update_task_state(&task_id, "waiting_for_permission");
+                    println!("👀 Updated task state --");
+
+                    println!("👀 Waiting for response --");
+                    match receiver.recv() {
+                        Ok(response) => {
+                            println!("👀 Received response --");
+                            update_task_state(&task_id, "running");
+                            response.to_prompt_response()
+                        }
+                        Err(_) => {
+                            update_task_state(&task_id, "error");
+                            PromptResponse::Deny
+                        }
+                    }
+                } else {
+                    println!("👀 No task found --");
+                    PromptResponse::Deny
+                }
+            } else {
+                println!("👀 No task found --");
+                PromptResponse::Deny
+            }
+        } else {
+            println!("No receiver found for thread {:?}", thread_id);
+            PromptResponse::Deny
+        }
+    }
+}
+
 pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
     // path of user directory
     let user_dir = dirs::home_dir().unwrap();
@@ -188,16 +284,34 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
     PERMISSION_CHANNELS
         .lock()
         .unwrap()
-        .insert(task_id.to_string(), tx);
+        .insert(thread::current().id(), tx);
+
+    // Register the receiver with the global prompter
+    CustomPrompter::register_receiver(thread::current().id(), rx);
+
+    // Set the global prompter only once
+    static PROMPTER_SET: std::sync::Once = std::sync::Once::new();
+    PROMPTER_SET.call_once(|| {
+        set_prompter(Box::new(CustomPrompter));
+    });
+
+    // Store task_id for current thread
+    TASK_TO_THREAD_MAP
+        .lock()
+        .unwrap()
+        .insert(task_id.to_string(), thread::current().id());
+
+    // Store thread_id for current task
+    THREAD_TO_TASK_MAP
+        .lock()
+        .unwrap()
+        .insert(thread::current().id(), task_id.to_string());
 
     // Initialize task state
     TASK_STATE.lock().unwrap().insert(
         task_id.to_string(),
         Task::new(task_id.to_string(), "running".to_string()),
     );
-
-    // Clone app_handle before moving it into CustomPrompter
-    set_prompter(Box::new(CustomPrompter::new(task_id.to_string(), rx)));
 
     let mut worker = MainWorker::bootstrap_from_options(
         main_module.clone(),
@@ -269,7 +383,25 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
     emit_task_state_changed(task_clone);
 
     // Clean up permission channel
-    PERMISSION_CHANNELS.lock().unwrap().remove(task_id);
+    PERMISSION_CHANNELS
+        .lock()
+        .unwrap()
+        .remove(&thread::current().id());
+
+    // Clean up at the end
+    CustomPrompter::remove_receiver(&thread::current().id());
+    PERMISSION_CHANNELS
+        .lock()
+        .unwrap()
+        .remove(&thread::current().id());
+    TASK_TO_THREAD_MAP
+        .lock()
+        .unwrap()
+        .remove(&task_id.to_string());
+    THREAD_TO_TASK_MAP
+        .lock()
+        .unwrap()
+        .remove(&thread::current().id());
 
     Ok(())
 }
@@ -284,98 +416,66 @@ pub fn clear_completed_tasks() {
 }
 
 pub fn update_task_state(task_id: &str, state: &str) {
+    println!("👀 Updating task state --");
     let mut state_lock = TASK_STATE.lock().unwrap();
-    let task = state_lock.get_mut(task_id).unwrap();
-    task.state = state.to_string();
+    println!("👀 Got state lock --");
 
+    let task = state_lock.get_mut(task_id).unwrap();
+    println!("👀 Got task --");
+
+    task.state = state.to_string();
+    println!("👀 Updated task state --");
     let task_clone = task.clone();
     drop(state_lock);
 
     emit_task_state_changed(task_clone);
+    println!("👀 Emitted task state changed --");
 }
 
 fn emit_task_state_changed(task: Task) {
+    println!("👀 Emitting task state changed --");
     let result = TAURI_TASK_EVENTS.0.send(task);
     if result.is_err() {
         println!("Failed to send task state changed");
     }
+    println!("👀 Emitted task state changed --");
 }
 
 pub fn respond_to_permission_prompt(task_id: &str, response: PermissionsResponse) {
-    if let Some(tx) = PERMISSION_CHANNELS.lock().unwrap().get(task_id) {
-        let mut state_lock = TASK_STATE.lock().unwrap();
-        if let Some(task) = state_lock.get_mut(task_id) {
-            // Update the latest prompt with the response
-            if let Some(prompt) = &mut task.permission_prompt {
-                prompt.response = Some(response.clone());
+    println!("👀 Responding to permission prompt --");
+
+    let thread_id = TASK_TO_THREAD_MAP.lock().unwrap().get(task_id).cloned();
+
+    if let Some(thread_id) = thread_id {
+        if let Some(tx) = PERMISSION_CHANNELS.lock().unwrap().get(&thread_id) {
+            println!("👀 Got permission channel --");
+            let mut state_lock = TASK_STATE.lock().unwrap();
+            println!("👀 Got state lock --");
+
+            if let Some(task) = state_lock.get_mut(task_id) {
+                println!("👀 Got task --");
+                // Update the latest prompt with the response
+                if let Some(prompt) = &mut task.permission_prompt {
+                    prompt.response = Some(response.clone());
+                }
+
+                // Update the permission history
+                if let Some(last) = task.permission_history.last_mut() {
+                    last.response = Some(response.clone());
+                }
+
+                println!("👀 Updated task --");
             }
 
-            // Update the permission history
-            if let Some(last) = task.permission_history.last_mut() {
-                last.response = Some(response.clone());
-            }
+            drop(state_lock);
+            println!("👀 Dropped state lock --");
+
+            let _ = tx.send(response);
+            println!("👀 Sent response --");
+        } else {
+            println!("👀 No permission channel found --");
         }
-
-        drop(state_lock);
-
-        let _ = tx.send(response);
-    }
-}
-
-struct CustomPrompter {
-    task_id: String,
-    receiver: Arc<Mutex<Receiver<PermissionsResponse>>>,
-}
-
-impl CustomPrompter {
-    fn new(task_id: String, receiver: Receiver<PermissionsResponse>) -> Self {
-        Self {
-            task_id,
-            receiver: Arc::new(Mutex::new(receiver)),
-        }
-    }
-}
-
-impl PermissionPrompter for CustomPrompter {
-    fn prompt(
-        &mut self,
-        message: &str,
-        name: &str,
-        api_name: Option<&str>,
-        is_unary: bool,
-    ) -> PromptResponse {
-        let prompt = PermissionPrompt {
-            message: message.to_string(),
-            name: name.to_string(),
-            api_name: api_name.map(|s| s.to_string()),
-            is_unary,
-            response: None,
-        };
-
-        println!("Prompting for permission: {:?}", prompt);
-
-        let mut state_lock = TASK_STATE.lock().unwrap();
-        if let Some(task) = state_lock.get_mut(&self.task_id) {
-            // Store as latest prompt
-            task.permission_prompt = Some(prompt.clone());
-            // Add to history
-            task.permission_history.push(prompt);
-        }
-        drop(state_lock);
-
-        update_task_state(&self.task_id, "waiting_for_permission");
-
-        match self.receiver.lock().unwrap().recv() {
-            Ok(response) => {
-                update_task_state(&self.task_id, "running");
-
-                response.to_prompt_response()
-            }
-            Err(_) => {
-                update_task_state(&self.task_id, "error");
-
-                PromptResponse::Deny
-            }
-        }
+    } else {
+        println!("👀 No thread found for task_id: {} --", task_id);
     }
 }
