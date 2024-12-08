@@ -279,7 +279,7 @@ impl PermissionPrompter for CustomPrompter {
             response: None,
         };
 
-        println!("👀 Prompting for permission: {:?}", prompt);
+        println!("Prompting for permission: {:?}", prompt);
 
         let receiver = {
             let receiver_map = RECEIVER_MAP.lock().unwrap();
@@ -294,25 +294,25 @@ impl PermissionPrompter for CustomPrompter {
 
             if let Some(task_id) = task_id {
                 if let Some(task) = state_lock.get_mut(&task_id) {
-                    println!("👀 Found task --");
+                    println!("Found task --");
 
                     // Store as latest prompt
                     task.permission_prompt = Some(prompt.clone());
-                    println!("👀 Stored as latest prompt --");
+                    println!("Stored as latest prompt --");
 
                     // Add to history
                     task.permission_history.push(prompt);
-                    println!("👀 Added to history --");
+                    println!("Added to history --");
 
                     drop(state_lock);
 
                     update_task_state(&task_id, "waiting_for_permission");
-                    println!("👀 Updated task state --");
+                    println!("Updated task state --");
 
-                    println!("👀 Waiting for response --");
+                    println!("Waiting for response --");
                     match receiver.recv() {
                         Ok(response) => {
-                            println!("👀 Received response --");
+                            println!("Received response --");
                             update_task_state(&task_id, "running");
                             response.to_prompt_response()
                         }
@@ -322,11 +322,11 @@ impl PermissionPrompter for CustomPrompter {
                         }
                     }
                 } else {
-                    println!("👀 No task found --");
+                    println!("No task found --");
                     PromptResponse::Deny
                 }
             } else {
-                println!("👀 No task found --");
+                println!("No task found --");
                 PromptResponse::Deny
             }
         } else {
@@ -460,44 +460,44 @@ pub fn clear_completed_tasks() {
 }
 
 pub fn update_task_state(task_id: &str, state: &str) {
-    println!("👀 Updating task state --");
+    println!("Updating task state --");
     let mut state_lock = TASK_STATE.lock().unwrap();
-    println!("👀 Got state lock --");
+    println!("Got state lock --");
 
     let task = state_lock.get_mut(task_id).unwrap();
-    println!("👀 Got task --");
+    println!("Got task --");
 
     task.state = state.to_string();
-    println!("👀 Updated task state --");
+    println!("Updated task state --");
     let task_clone = task.clone();
     drop(state_lock);
 
     emit_task_state_changed(task_clone);
-    println!("👀 Emitted task state changed --");
+    println!("Emitted task state changed --");
 }
 
 fn emit_task_state_changed(task: Task) {
-    println!("👀 Emitting task state changed --");
+    println!("Emitting task state changed --");
     let result = TAURI_TASK_EVENTS.0.send(task);
     if result.is_err() {
         println!("Failed to send task state changed");
     }
-    println!("👀 Emitted task state changed --");
+    println!("Emitted task state changed --");
 }
 
 pub fn respond_to_permission_prompt(task_id: &str, response: PermissionsResponse) {
-    println!("👀 Responding to permission prompt --");
+    println!("Responding to permission prompt --");
 
     let thread_id = TASK_TO_THREAD_MAP.lock().unwrap().get(task_id).cloned();
 
     if let Some(thread_id) = thread_id {
         if let Some(tx) = PERMISSION_CHANNELS.lock().unwrap().get(&thread_id) {
-            println!("👀 Got permission channel --");
+            println!("Got permission channel --");
             let mut state_lock = TASK_STATE.lock().unwrap();
-            println!("👀 Got state lock --");
+            println!("Got state lock --");
 
             if let Some(task) = state_lock.get_mut(task_id) {
-                println!("👀 Got task --");
+                println!("Got task --");
                 // Update the latest prompt with the response
                 if let Some(prompt) = &mut task.permission_prompt {
                     prompt.response = Some(response.clone());
@@ -508,18 +508,18 @@ pub fn respond_to_permission_prompt(task_id: &str, response: PermissionsResponse
                     last.response = Some(response.clone());
                 }
 
-                println!("👀 Updated task --");
+                println!("Updated task --");
             }
 
             drop(state_lock);
-            println!("👀 Dropped state lock --");
+            println!("Dropped state lock --");
 
             let _ = tx.send(response);
-            println!("👀 Sent response --");
+            println!("Sent response --");
         } else {
-            println!("👀 No permission channel found --");
+            println!("No permission channel found --");
         }
     } else {
-        println!("👀 No thread found for task_id: {} --", task_id);
+        println!("No thread found for task_id: {} --", task_id);
     }
 }
