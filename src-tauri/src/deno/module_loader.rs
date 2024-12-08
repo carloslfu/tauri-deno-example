@@ -43,7 +43,7 @@ impl ModuleLoader for TypescriptModuleLoader {
             source_maps: SourceMapStore,
             module_specifier: &ModuleSpecifier,
         ) -> Result<ModuleSource, AnyError> {
-            println!("👀 load: {}", module_specifier);
+            println!("load: {}", module_specifier);
 
             let (code, should_transpile, media_type, module_type) =
                 if module_specifier.scheme() == "file" {
@@ -86,7 +86,7 @@ impl ModuleLoader for TypescriptModuleLoader {
                         ModuleType::JavaScript,
                     )
                 } else {
-                    println!("👀 unknown scheme {:?}", module_specifier.scheme());
+                    println!("unknown scheme {:?}", module_specifier.scheme());
                     bail!("Unknown scheme {:?}", module_specifier.scheme())
                 };
 
