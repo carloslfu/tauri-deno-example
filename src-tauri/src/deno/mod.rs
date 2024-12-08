@@ -1,10 +1,6 @@
 #![allow(clippy::print_stdout)]
 #![allow(clippy::print_stderr)]
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::thread;
-
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use deno_runtime::deno_core::error::AnyError;
 use deno_runtime::deno_core::op2;
@@ -12,6 +8,9 @@ use deno_runtime::deno_permissions::set_prompter;
 use deno_runtime::deno_permissions::PermissionPrompter;
 use deno_runtime::deno_permissions::PromptResponse;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::thread;
 use tauri::{AppHandle, Emitter};
 
 // Task events channel for task state changes that will be received by Tauri
@@ -19,6 +18,103 @@ static TAURI_TASK_EVENTS: Lazy<(Sender<Task>, Receiver<Task>)> = Lazy::new(|| {
     let (tx, rx) = unbounded();
     (tx, rx)
 });
+
+// Store thread handles and their status
+static THREAD_HANDLES: Lazy<Mutex<HashMap<String, std::thread::JoinHandle<Result<(), String>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+// shutdown channel map
+static SHUTDOWN_CHANNELS: Lazy<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+pub fn run_task(task_id: &str, code: &str) -> Result<(), String> {
+    let code = code.to_string();
+
+    let task_id = task_id.to_string();
+    let task_id_clone = task_id.clone();
+
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+
+    SHUTDOWN_CHANNELS
+        .lock()
+        .unwrap()
+        .insert(task_id.clone(), stop_tx);
+
+    let handle = std::thread::spawn(move || {
+        println!("Starting runtime");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        println!("Starting async task");
+
+        let _ = runtime.block_on(async {
+            tokio::select! {
+                _ = run(&task_id_clone, &code) => {},
+                _ = stop_rx => {
+                    println!("Task stopped");
+                }
+            }
+        });
+
+        println!("Runtime shutdown");
+
+        // clean up
+        SHUTDOWN_CHANNELS.lock().unwrap().remove(&task_id_clone);
+        THREAD_HANDLES.lock().unwrap().remove(&task_id_clone);
+
+        Ok(())
+    });
+
+    // Store the handle
+    THREAD_HANDLES.lock().unwrap().insert(task_id, handle);
+
+    Ok(())
+}
+
+pub fn stop_task(task_id: &str) -> Result<(), String> {
+    let mut handles = THREAD_HANDLES.lock().unwrap();
+
+    let task_id_clone = task_id.to_string();
+
+    if let Some(handle) = handles.remove(&task_id_clone) {
+        // Thread is already finished
+        if handle.is_finished() {
+            return Ok(());
+        }
+
+        // Attempt to stop the thread
+        std::thread::spawn(move || {
+            update_task_state(&task_id_clone, "stopping");
+
+            // send shutdown message
+            let result = SHUTDOWN_CHANNELS
+                .lock()
+                .unwrap()
+                .remove(&task_id_clone)
+                .unwrap()
+                .send(());
+
+            if result.is_err() {
+                println!("Failed to send shutdown message");
+            }
+
+            // Wait for thread to complete
+            match handle.join() {
+                Ok(_) => {}
+                Err(_) => {
+                    println!("Failed to stop thread");
+                }
+            };
+
+            update_task_state(&task_id_clone, "stopped");
+        });
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 pub enum PermissionsResponse {
@@ -245,8 +341,11 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
     let user_dir = dirs::home_dir().unwrap();
 
     // create code dir
-    let code_dir = user_dir.join("tauri_deno_example");
+    let code_dir = user_dir.join(".tauri_deno_example");
     std::fs::create_dir_all(&code_dir).unwrap();
+
+    let deno_dir = code_dir.join("deno_dir");
+    std::fs::create_dir_all(&deno_dir).unwrap();
 
     let temp_code_path = code_dir.join(format!("temp_code_{}.ts", task_id));
 
@@ -291,6 +390,10 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
     );
 
     let extensions = vec![runtime_extension::init_ops_and_esm()];
+
+    std::env::set_var("DENO_DIR", deno_dir.to_string_lossy().to_string());
+
+    std::env::set_var("DENO_TRACE_PERMISSIONS", "1");
 
     let result = deno_lib_ext::run_file(&temp_code_path.to_string_lossy(), extensions).await;
 
