@@ -1,11 +1,14 @@
-import { return_value, document_dir } from "ext:core/ops";
+const { ops } = globalThis.Deno.core;
 
 function returnValue(value) {
-  return_value(globalThis.RuntimeExtension.taskId, JSON.stringify(value));
+  ops.custom_op_return_value(
+    globalThis.RuntimeExtension.taskId,
+    JSON.stringify(value)
+  );
 }
 
 function documentDir() {
-  return document_dir();
+  return ops.custom_op_document_dir();
 }
 
 globalThis.RuntimeExtension = { returnValue, documentDir };

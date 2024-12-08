@@ -1,30 +1,16 @@
 #![allow(clippy::print_stdout)]
 #![allow(clippy::print_stderr)]
 
-mod module_loader;
-
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use deno_runtime::deno_core::error::AnyError;
 use deno_runtime::deno_core::op2;
-use deno_runtime::deno_core::ModuleSpecifier;
-use deno_runtime::deno_fs::RealFs;
 use deno_runtime::deno_permissions::set_prompter;
 use deno_runtime::deno_permissions::PermissionPrompter;
-use deno_runtime::deno_permissions::Permissions;
-use deno_runtime::deno_permissions::PermissionsContainer;
 use deno_runtime::deno_permissions::PromptResponse;
-use deno_runtime::permissions::RuntimePermissionDescriptorParser;
-use deno_runtime::worker::MainWorker;
-use deno_runtime::worker::WorkerOptions;
-use deno_runtime::worker::WorkerServiceOptions;
-use module_loader::TypescriptModuleLoader;
 use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter};
 
@@ -134,7 +120,7 @@ impl Task {
 static TASK_STATE: Lazy<Mutex<HashMap<String, Task>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[op2(fast)]
-fn return_value(#[string] task_id: &str, #[string] value: &str) {
+fn custom_op_return_value(#[string] task_id: &str, #[string] value: &str) {
     let mut state_lock = TASK_STATE.lock().unwrap();
     let task = state_lock.get_mut(task_id).unwrap();
     task.return_value = value.to_string();
@@ -142,13 +128,13 @@ fn return_value(#[string] task_id: &str, #[string] value: &str) {
 
 #[op2]
 #[string]
-fn document_dir() -> Option<String> {
+fn custom_op_document_dir() -> Option<String> {
     dirs::document_dir().map(|path| path.to_string_lossy().to_string())
 }
 
 deno_runtime::deno_core::extension!(
   runtime_extension,
-  ops = [return_value, document_dir],
+  ops = [custom_op_return_value, custom_op_document_dir],
   esm_entry_point = "ext:runtime_extension/bootstrap.js",
   esm = [dir "src/deno", "bootstrap.js"]
 );
@@ -186,6 +172,7 @@ impl PermissionPrompter for CustomPrompter {
         name: &str,
         api_name: Option<&str>,
         is_unary: bool,
+        stack: Option<Vec<deno_core::error::JsStackFrame>>,
     ) -> PromptResponse {
         let thread_id = thread::current().id();
         let prompt = PermissionPrompt {
@@ -269,16 +256,6 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
 
     std::fs::write(&temp_code_path, augmented_code).unwrap();
 
-    let main_module = ModuleSpecifier::from_file_path(&temp_code_path).unwrap();
-
-    let fs = Arc::new(RealFs);
-    let permission_desc_parser = Arc::new(RuntimePermissionDescriptorParser::new(fs.clone()));
-
-    let source_map_store = Rc::new(RefCell::new(HashMap::new()));
-
-    let permission_container =
-        PermissionsContainer::new(permission_desc_parser, Permissions::none_with_prompt());
-
     // Create channel for permission prompts
     let (tx, rx) = unbounded();
     PERMISSION_CHANNELS
@@ -313,49 +290,9 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
         Task::new(task_id.to_string(), "running".to_string()),
     );
 
-    let mut worker = MainWorker::bootstrap_from_options(
-        main_module.clone(),
-        WorkerServiceOptions {
-            module_loader: Rc::new(TypescriptModuleLoader {
-                source_maps: source_map_store,
-            }),
-            // File only loader
-            // module_loader: Rc::new(FsModuleLoader),
-            permissions: permission_container,
-            blob_store: Default::default(),
-            broadcast_channel: Default::default(),
-            feature_checker: Default::default(),
-            node_services: Default::default(),
-            npm_process_state_provider: Default::default(),
-            root_cert_store_provider: Default::default(),
-            shared_array_buffer_store: Default::default(),
-            compiled_wasm_module_store: Default::default(),
-            v8_code_cache: Default::default(),
-            fs,
-        },
-        WorkerOptions {
-            extensions: vec![runtime_extension::init_ops_and_esm()],
-            ..Default::default()
-        },
-    );
+    let extensions = vec![runtime_extension::init_ops_and_esm()];
 
-    let result = worker.execute_main_module(&main_module).await;
-    if let Err(e) = result {
-        let mut state_lock = TASK_STATE.lock().unwrap();
-        let task = state_lock.get_mut(task_id).unwrap();
-        task.state = "error".to_string();
-        task.error = e.to_string();
-
-        let task_clone = task.clone();
-        drop(state_lock);
-
-        emit_task_state_changed(task_clone);
-        std::fs::remove_file(&temp_code_path).unwrap();
-
-        return Ok(());
-    }
-
-    let result = worker.run_event_loop(false).await;
+    let result = deno_lib_ext::run_file(&temp_code_path.to_string_lossy(), extensions).await;
 
     if let Err(e) = result {
         let mut state_lock = TASK_STATE.lock().unwrap();
