@@ -283,6 +283,7 @@ impl PermissionPrompter for CustomPrompter {
         name: &str,
         api_name: Option<&str>,
         is_unary: bool,
+        _: Option<Vec<deno_core::error::JsStackFrame>>, // stack frames
     ) -> PromptResponse {
         let thread_id = thread::current().id();
         let prompt = PermissionPrompt {
@@ -428,6 +429,7 @@ pub async fn run(task_id: &str, code: &str) -> Result<(), AnyError> {
             shared_array_buffer_store: Default::default(),
             compiled_wasm_module_store: Default::default(),
             v8_code_cache: Default::default(),
+            fetch_dns_resolver: Default::default(),
             fs,
         },
         WorkerOptions {
