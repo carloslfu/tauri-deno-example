@@ -89,10 +89,10 @@ await Deno.writeTextFile(\`\${path}/post.json\`, JSON.stringify({
 
 console.log("done")
 
-RuntimeExtension.returnValue({ text, post })
-
 // wait 5 seconds
 await new Promise((resolve) => setTimeout(resolve, 5000))
+
+RuntimeExtension.returnValue({ text, post })
 `;
 
 function App() {
